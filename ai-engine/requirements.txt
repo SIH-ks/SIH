@@ -1,0 +1,48 @@
+# ==============================================================================
+# Adhikar :: ai-engine
+# Intelligent Land Record Digitization & Validation System (SIH26018)
+# Python 3.11+
+# ==============================================================================
+
+# --- Core data modelling & settings -------------------------------------------
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-dateutil==2.9.0.post0
+PyYAML==6.0.2
+orjson==3.10.18
+
+# --- Vision LLM (structured extraction) ---------------------------------------
+anthropic==1.2.0
+
+# --- Document / raster ingestion ----------------------------------------------
+pypdfium2==4.30.0            # PDF -> raster. No Poppler / system binary needed.
+Pillow==11.3.0
+numpy==2.2.6
+opencv-python-headless==4.11.0.86   # deskew, denoise, morphological table lines
+
+# --- OCR engines ---------------------------------------------------------------
+easyocr==1.7.2               # Devanagari / Gujarati / Telugu / Kannada + Latin
+pytesseract==0.3.13          # requires the Tesseract binary + `hin`/`mar`/`guj` traineddata
+# torch/torchvision are pulled in by easyocr. Pin the CPU wheels in CI:
+#   pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+
+# --- Text normalisation --------------------------------------------------------
+rapidfuzz==3.13.0            # fuzzy header/label matching across OCR noise
+regex==2024.11.6             # Unicode script properties (\p{Devanagari})
+
+# --- Geospatial (discrepancy engine) -------------------------------------------
+shapely==2.1.1
+pyproj==3.7.1                # geodesic (ellipsoidal) polygon area on WGS84
+
+# --- CLI / observability --------------------------------------------------------
+typer==0.16.0
+rich==14.0.0
+structlog==25.4.0
+tenacity==9.1.2              # retry policy around engine + network boundaries
+
+# --- Dev / QA -------------------------------------------------------------------
+pytest==8.4.1
+pytest-cov==6.2.1
+mypy==1.16.1
+ruff==0.12.2
+types-PyYAML==6.0.12.20250516

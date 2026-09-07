@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.env
+!*.env.example
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project output
+output/
+*.log
+
+# EasyOCR model cache (large; regenerated on first run)
+.EasyOCR/

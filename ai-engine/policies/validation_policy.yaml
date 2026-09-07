@@ -1,0 +1,68 @@
+# Adhikar validation policy — default
+#
+# Every threshold the validation engine uses lives here. A rule not listed under
+# `rules:` runs with the defaults below (`default_absolute_sq_metre`,
+# `default_relative`, `default_min_confidence`) and stays enabled.
+#
+# To adopt a state-specific tolerance, copy this file (e.g.
+# `validation_policy.maharashtra.yaml`), adjust the values, and point
+# ADHIKAR_VALIDATION_POLICY_PATH at it. Unknown rule codes are rejected at load
+# time, so a typo here fails fast instead of silently doing nothing.
+
+name: default
+description: >
+  Conservative national baseline tolerances. Cadastral survey error and rounding
+  in manual area calculation are the two things these tolerances are meant to
+  absorb without also absorbing genuine transcription errors.
+
+# Fallback tolerances for any rule not explicitly configured below.
+default_absolute_sq_metre: 1.0    # 1 sq m — smaller than any meaningful survey error
+default_relative: 0.005           # 0.5%
+default_min_confidence: 0.60
+
+rules:
+  # -- Arithmetic consistency --------------------------------------------------------
+  AREA_SUM_MISMATCH:
+    absolute_sq_metre: 2.0
+    relative: 0.005
+    note: >
+      2 sq m / 0.5%, whichever is looser. Sub-division areas are usually read
+      from the same table as the total, so agreement should be tight; a wider
+      band here would mask real transcription slips.
+
+  CLASSIFICATION_SPLIT_MISMATCH:
+    absolute_sq_metre: 2.0
+    relative: 0.005
+
+  AREA_COMPONENT_OUT_OF_RANGE:
+    severity: warning
+
+  ASSESSMENT_DISPROPORTIONATE:
+    z_score_threshold: 2.5
+    note: >
+      Flags a sub-division whose revenue-per-area is more than 2.5 standard
+      deviations from its siblings. This is a statistical hint, not proof of an
+      error — irrigated and waste land legitimately carry very different rates.
+
+  # -- Ownership -----------------------------------------------------------------------
+  SHARE_SUM_NOT_UNITY:
+    severity: warning
+
+  # -- Mutation chain ----------------------------------------------------------------------
+  MUTATION_PENDING_UNRESOLVED:
+    max_age_days: 180
+    note: Escalate any mutation pending more than six months.
+
+  OWNER_WITHOUT_MUTATION_TRAIL:
+    severity: info
+    note: >
+      Name matching across scripts and spelling variants is approximate; keep
+      this informational rather than a hard error.
+
+  # -- Encumbrance -----------------------------------------------------------------------
+  ENCUMBRANCE_ACTIVE:
+    severity: info
+
+  # -- Extraction quality (reserved for future OCR/LLM-confidence-based rules) -----------------
+  LOW_FIELD_CONFIDENCE:
+    min_confidence: 0.55

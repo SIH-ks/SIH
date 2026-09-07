@@ -1,0 +1,161 @@
+"""Runtime configuration, sourced from the environment.
+
+Everything tunable lives here so behaviour is reproducible from a recorded settings
+snapshot. Nothing in this module reads a secret at import time -- the Anthropic SDK
+resolves credentials itself (``ANTHROPIC_API_KEY``, ``ANTHROPIC_AUTH_TOKEN``, or an
+``ant auth login`` profile), so no key is ever held in a field or logged.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .exceptions import ConfigurationError
+
+__all__ = ["Settings", "get_settings"]
+
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+_PROJECT_ROOT = _PACKAGE_ROOT.parent.parent
+
+
+class Settings(BaseSettings):
+    """Engine settings. Every field is overridable by an ``ADHIKAR_``-prefixed env var."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ADHIKAR_",
+        env_file=(".env", "../.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # -- Vision LLM ---------------------------------------------------------------------
+    llm_model: str = "claude-opus-5"
+    """Extraction model. Opus is the default because a misread khasra number is
+    expensive to discover downstream and cheap to avoid here."""
+
+    llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    """Reasoning effort. Faint multi-column Devanagari tables reward `high`; drop to
+    `medium` for clean born-digital PDFs where the table structure is unambiguous."""
+
+    llm_max_tokens: int = 32_000
+    llm_timeout_seconds: float = 600.0
+    llm_max_retries: int = 3
+
+    llm_enable_prompt_caching: bool = True
+    """The extraction prompt is a large fixed prefix (schema + few-shot layout guide);
+    caching it cuts per-page input cost substantially across a batch."""
+
+    llm_cache_ttl: Literal["5m", "1h"] = "1h"
+    """1h suits batch ingestion runs, where the same prefix is reused for hours."""
+
+    llm_input_usd_per_mtok: float = 5.00
+    llm_output_usd_per_mtok: float = 25.00
+    """Rates for cost attribution only. Update alongside the model choice."""
+
+    # -- Rasterisation --------------------------------------------------------------------
+    render_dpi: int = Field(default=300, ge=72, le=1200)
+    """300 dpi is the floor for reliable Devanagari conjunct recognition. Below ~200
+    the matras merge into the headline stroke and both OCR engines degrade sharply."""
+
+    max_image_edge_px: int = Field(default=2400, ge=512)
+    """Longest edge sent to the LLM. Larger costs tokens without helping accuracy."""
+
+    max_pages_per_document: int = Field(default=50, ge=1)
+
+    # -- Preprocessing -----------------------------------------------------------------------
+    enable_deskew: bool = True
+    max_deskew_angle_deg: float = Field(default=15.0, gt=0, le=45)
+    """Beyond this the page is misfed rather than skewed; rotating it would be wrong."""
+
+    enable_denoise: bool = True
+    enable_adaptive_threshold: bool = True
+    """Adaptive rather than global: scans of old registers have strong illumination
+    gradients, and a global threshold erases whole columns."""
+
+    # -- OCR ----------------------------------------------------------------------------------
+    ocr_languages: list[str] = Field(default_factory=lambda: ["hi", "en"])
+    """EasyOCR codes. 'hi' covers Devanagari (Hindi/Marathi); add 'gu', 'te', 'kn',
+    'ta', 'bn' per state. Latin is kept alongside for numerals and English headers."""
+
+    tesseract_languages: str = "hin+eng"
+    """Tesseract traineddata names, '+'-joined. Add 'mar' for Marathi 7/12."""
+
+    tesseract_cmd: str | None = None
+    """Explicit path to the binary when it is not on PATH (typical on Windows)."""
+
+    ocr_min_token_confidence: float = Field(default=0.30, ge=0.0, le=1.0)
+    """Tokens below this are dropped before assembly -- they are noise, not text."""
+
+    ocr_use_gpu: bool = False
+    enable_easyocr: bool = True
+    enable_tesseract: bool = True
+
+    # -- Layout --------------------------------------------------------------------------------
+    table_min_line_length_ratio: float = Field(default=0.30, ge=0.05, le=1.0)
+    """A ruled line must span this fraction of the page to count as a table border."""
+
+    table_cell_padding_px: int = Field(default=2, ge=0)
+
+    # -- Validation ----------------------------------------------------------------------------
+    validation_policy_path: Path = _PROJECT_ROOT / "policies" / "validation_policy.yaml"
+    default_bigha_region: str | None = None
+    """Set per-deployment (e.g. 'up_pucca') when the corpus is single-state. Left
+    unset, bigha figures raise rather than being converted on a guess."""
+
+    # -- Discrepancy engine -----------------------------------------------------------------------
+    geometry_severe_threshold: float = Field(default=0.10, gt=0, le=1.0)
+    """Relative area difference treated as 'severe'; anchors the 0-100 mismatch scale."""
+
+    geometry_survey_tolerance: float = Field(default=0.005, gt=0, le=1.0)
+    """Baseline cadastral survey tolerance before the source-accuracy multiplier."""
+
+    auto_approve_min_confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+
+    # -- I/O ---------------------------------------------------------------------------------------
+    artifact_output_dir: Path = _PROJECT_ROOT / "output"
+    geometry_source_path: Path | None = None
+    """GeoJSON / shapefile of cadastral polygons for cross-referencing."""
+
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_json: bool = False
+
+    @field_validator("ocr_languages")
+    @classmethod
+    def _non_empty_languages(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("ocr_languages must name at least one language")
+        return v
+
+    @model_validator(mode="after")
+    def _at_least_one_ocr_engine(self) -> Settings:
+        if not (self.enable_easyocr or self.enable_tesseract):
+            raise ConfigurationError(
+                "both OCR engines are disabled; the pipeline would have no text source. "
+                "Enable ADHIKAR_ENABLE_EASYOCR or ADHIKAR_ENABLE_TESSERACT."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _tolerance_ordering(self) -> Settings:
+        if self.geometry_survey_tolerance >= self.geometry_severe_threshold:
+            raise ConfigurationError(
+                f"geometry_survey_tolerance ({self.geometry_survey_tolerance}) must be well "
+                f"below geometry_severe_threshold ({self.geometry_severe_threshold}); otherwise "
+                "every out-of-tolerance parcel scores as severe and the bands carry no signal."
+            )
+        return self
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Process-wide settings singleton.
+
+    Cached so a mid-run environment change cannot make two stages disagree about
+    tolerances. Call ``get_settings.cache_clear()`` in tests that need a fresh read.
+    """
+    return Settings()

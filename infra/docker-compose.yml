@@ -1,0 +1,42 @@
+# Local development stack: PostGIS + Redis. The backend and frontend run outside
+# Docker (uvicorn --reload / next dev) for fast iteration; containerize both for a
+# deployed environment.
+version: "3.9"
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: adhikar
+      POSTGRES_PASSWORD: adhikar
+      POSTGRES_DB: adhikar
+    ports:
+      - "5432:5432"
+    volumes:
+      - adhikar_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adhikar"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: adhikar
+      MINIO_ROOT_PASSWORD: adhikar-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - adhikar_minio:/data
+
+volumes:
+  adhikar_pgdata:
+  adhikar_minio:

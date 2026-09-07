@@ -1,0 +1,45 @@
+# ==============================================================================
+# Adhikar :: backend (FastAPI + PostgreSQL/PostGIS)
+# Python 3.11+
+# ==============================================================================
+
+# --- Web framework ---------------------------------------------------------------
+fastapi==0.115.14
+uvicorn[standard]==0.35.0
+python-multipart==0.0.20      # multipart/form-data scan uploads
+pydantic==2.11.7
+pydantic-settings==2.10.1
+
+# --- Persistence -----------------------------------------------------------------
+SQLAlchemy==2.0.41
+GeoAlchemy2==0.17.1           # PostGIS column types (Geometry, Geography)
+psycopg[binary,pool]==3.2.9   # psycopg3 driver
+alembic==1.16.2
+
+# --- Spatial helpers --------------------------------------------------------------
+shapely==2.1.1
+geojson-pydantic==1.2.0       # RFC 7946 models that round-trip through PostGIS
+
+# --- Async job queue ---------------------------------------------------------------
+celery[redis]==5.5.3
+redis==6.2.0
+
+# --- Object storage (scanned records) -----------------------------------------------
+boto3==1.39.3                 # S3 / MinIO compatible
+
+# --- AuthN / AuthZ --------------------------------------------------------------------
+pyjwt[crypto]==2.10.1
+passlib[argon2]==1.7.4
+
+# --- Observability ----------------------------------------------------------------------
+structlog==25.4.0
+prometheus-fastapi-instrumentator==7.1.0
+
+# --- The extraction engine (local path dependency) ----------------------------------------
+-e ../ai-engine
+
+# --- Dev / QA ------------------------------------------------------------------------------
+pytest==8.4.1
+pytest-asyncio==1.0.0
+httpx==0.28.1
+ruff==0.12.2
