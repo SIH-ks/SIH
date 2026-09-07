@@ -20,9 +20,7 @@ Request shape
 
 from __future__ import annotations
 
-import base64
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +31,9 @@ from ..exceptions import LlmExtractionError, LlmRefusalError
 from ..schemas.artifact import TokenUsage
 from ..schemas.llm_contract import LlmExtraction
 from ..schemas.ocr import PageOcr
+from .base import ExtractionResult
 from .prompts import EXTRACTION_SYSTEM_PROMPT
+from .rendering import downscale_if_needed, encode_png_base64, render_ocr_layer
 from .schema import build_strict_tool_schema
 
 __all__ = ["ExtractionResult", "VisionExtractor"]
@@ -49,44 +49,6 @@ _TOOL_SCHEMA = build_strict_tool_schema(
 )
 
 _RETRYABLE_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
-
-
-@dataclass(slots=True)
-class ExtractionResult:
-    """One extraction call's output plus its cost and latency accounting."""
-
-    extraction: LlmExtraction
-    token_usage: TokenUsage
-    model: str
-    effort: str
-    duration_ms: float
-    stop_reason: str
-
-
-def _encode_image(image: np.ndarray) -> tuple[str, str]:
-    """PNG-encode a raster for the Messages API. Returns (media_type, base64_data)."""
-    from PIL import Image
-    import io
-
-    buffer = io.BytesIO()
-    Image.fromarray(image).save(buffer, format="PNG")
-    return "image/png", base64.standard_b64encode(buffer.getvalue()).decode("ascii")
-
-
-def _downscale_if_needed(image: np.ndarray, *, max_edge: int) -> np.ndarray:
-    """Shrink an oversized raster before sending it -- tokens scale with pixels, not
-    with legibility past the point conjuncts are already resolvable."""
-    height, width = image.shape[:2]
-    longest = max(height, width)
-    if longest <= max_edge:
-        return image
-
-    from PIL import Image
-
-    scale = max_edge / longest
-    new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
-    resized = Image.fromarray(image).resize(new_size, Image.Resampling.LANCZOS)
-    return np.asarray(resized)
 
 
 class VisionExtractor:
@@ -145,14 +107,14 @@ class VisionExtractor:
             content.append({"type": "text", "text": document_hint})
 
         for page in pages:
-            prepared = _downscale_if_needed(page, max_edge=self._settings.max_image_edge_px)
-            media_type, data = _encode_image(prepared)
+            prepared = downscale_if_needed(page, max_edge=self._settings.max_image_edge_px)
+            data = encode_png_base64(prepared)
             content.append(
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}
             )
 
         if ocr_pages:
-            ocr_text = _render_ocr_layer(ocr_pages)
+            ocr_text = render_ocr_layer(ocr_pages)
             content.append({"type": "text", "text": ocr_text})
 
         content.append(
@@ -268,25 +230,6 @@ class VisionExtractor:
 
 class _TransientLlmError(Exception):
     """Internal marker for tenacity's retry predicate. Never escapes this module."""
-
-
-def _render_ocr_layer(pages: list[PageOcr]) -> str:
-    """Render the OCR ensemble's reading as a text layer, tables as markdown.
-
-    This is explicitly framed to the model as approximate and secondary (see the
-    system prompt's rule 1) -- its purpose is to catch cases where the image is
-    ambiguous but the character-level OCR, imperfect as it is, still got the digits
-    right.
-    """
-    parts = ["## OCR text layer (approximate; the image is authoritative on conflict)"]
-    for page in pages:
-        parts.append(f"\n### Page {page.page_index + 1}")
-        if page.tables:
-            for i, table in enumerate(page.tables):
-                parts.append(f"\nTable {i + 1}:\n{table.to_markdown()}")
-        else:
-            parts.append(page.full_text)
-    return "\n".join(parts)
 
 
 def load_page_image(path: str | Path) -> np.ndarray:

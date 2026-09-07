@@ -34,13 +34,24 @@ class Settings(BaseSettings):
     )
 
     # -- Vision LLM ---------------------------------------------------------------------
+    llm_provider: Literal["anthropic", "groq"] = "groq"
+    """Which backend :func:`adhikar.llm.factory.build_extractor` constructs.
+
+    ``groq`` runs against Groq's free-tier OpenAI-compatible API (a `GROQ_API_KEY`
+    from https://console.groq.com/keys, no billing setup required) -- the default so
+    the pipeline is runnable with zero-cost credentials out of the box. ``anthropic``
+    is the strict-tool-use path documented in :mod:`adhikar.llm.extractor`, with
+    materially stronger accuracy on dense multilingual tables; switch to it for
+    production accuracy once a paid key is available."""
+
     llm_model: str = "claude-opus-5"
-    """Extraction model. Opus is the default because a misread khasra number is
-    expensive to discover downstream and cheap to avoid here."""
+    """Extraction model for the ``anthropic`` provider. Opus is the default because a
+    misread khasra number is expensive to discover downstream and cheap to avoid here."""
 
     llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
-    """Reasoning effort. Faint multi-column Devanagari tables reward `high`; drop to
-    `medium` for clean born-digital PDFs where the table structure is unambiguous."""
+    """Reasoning effort (``anthropic`` provider only). Faint multi-column Devanagari
+    tables reward `high`; drop to `medium` for clean born-digital PDFs where the table
+    structure is unambiguous."""
 
     llm_max_tokens: int = 32_000
     llm_timeout_seconds: float = 600.0
@@ -48,14 +59,31 @@ class Settings(BaseSettings):
 
     llm_enable_prompt_caching: bool = True
     """The extraction prompt is a large fixed prefix (schema + few-shot layout guide);
-    caching it cuts per-page input cost substantially across a batch."""
+    caching it cuts per-page input cost substantially across a batch. Anthropic only --
+    Groq's API has no prompt-caching primitive."""
 
     llm_cache_ttl: Literal["5m", "1h"] = "1h"
     """1h suits batch ingestion runs, where the same prefix is reused for hours."""
 
     llm_input_usd_per_mtok: float = 5.00
     llm_output_usd_per_mtok: float = 25.00
-    """Rates for cost attribution only. Update alongside the model choice."""
+    """Rates for cost attribution only (``anthropic`` provider). Update alongside the
+    model choice. Groq's free tier is treated as zero-cost -- see
+    :class:`~adhikar.llm.groq_extractor.GroqVisionExtractor`."""
+
+    # -- Groq provider ------------------------------------------------------------------
+    groq_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    """A vision-capable model on Groq's free tier. Groq's model catalog moves faster
+    than most providers' (preview models are retired on short notice) -- if this ID
+    stops resolving, list current models at https://console.groq.com/docs/models
+    (filter for vision support) and override via ADHIKAR_GROQ_MODEL."""
+
+    groq_max_completion_tokens: int = 8_000
+    groq_max_json_repair_attempts: int = 2
+    """Groq's structured-output guarantee is weaker than Anthropic's strict tool use --
+    an open model asked for JSON occasionally emits a trailing comment or truncates.
+    On a parse/validation failure the extractor re-prompts with the error attached,
+    up to this many extra attempts, before giving up."""
 
     # -- Rasterisation --------------------------------------------------------------------
     render_dpi: int = Field(default=300, ge=72, le=1200)

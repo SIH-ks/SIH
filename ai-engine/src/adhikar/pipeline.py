@@ -24,7 +24,8 @@ from .config import Settings, get_settings
 from .exceptions import AdhikarError, StageDegradedError
 from .geo.discrepancy import ConfidenceInputs, compute_discrepancy
 from .layout.tables import assign_tokens_to_grid, detect_table_grids
-from .llm.extractor import VisionExtractor
+from .llm.base import VisionExtractorProtocol
+from .llm.factory import build_extractor
 from .llm.mapper import index_field_confidences, map_extraction
 from .ocr.ensemble import run_ocr_ensemble
 from .preprocessing.enhance import prepare_page
