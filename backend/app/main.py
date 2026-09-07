@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from adhikar.exceptions import AdhikarError
@@ -52,6 +53,15 @@ app.add_middleware(
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+# The zero-setup local storage backend `ingestion.py` actually writes to (original
+# scans + rendered page PNGs) -- served directly rather than through a DB-backed
+# download endpoint since these are static, content-hashed files. Swap for a
+# reverse-proxy/CDN rule in front of the real object-storage bucket in production;
+# nothing else in the API needs to change since `page_image_urls` is already just
+# an opaque relative URL as far as callers are concerned.
+settings.local_storage_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static/uploads", StaticFiles(directory=settings.local_storage_dir), name="uploads")
 
 
 @app.exception_handler(AdhikarError)

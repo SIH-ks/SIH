@@ -1,77 +1,50 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Design system: a dark geospatial-operations console, not a SaaS dashboard.
- * Fixed dark theme (no light mode) — this is a deliberate identity choice for a
- * command-center-style tool, the same way Bloomberg terminals or ATC consoles don't
- * ship a "light mode". Every color below is referenced by name in components, never
- * inlined as a raw hex, so the palette stays a single edit point.
+ * Institutional design system: a deep-navy command bar over a crisp white
+ * workspace, with accessible green/amber/red status colors. This is a
+ * light-theme rebuild replacing the earlier dark HUD console -- see git history
+ * for that version if it's ever wanted back.
  */
 const config: Config = {
-  darkMode: "class",
+  darkMode: "media",
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        void: "#050708", // page background — near-black, not pure black (keeps depth)
-        hull: "#0a0e12", // panel background
-        plate: "#0e141a", // raised panel / table header background
-        seam: "#1c252d", // hairline borders
-        seam2: "#2a3641", // brighter border for focus/hover
-        signal: {
-          cyan: "#3ee6d8",
-          amber: "#f5a623",
-          red: "#ff4d5e",
-          green: "#3ecf8e",
+        navy: {
+          950: "#050b18",
+          900: "#0a1530",
+          800: "#0f2557",
+          700: "#15316b",
+          600: "#1c3f85",
         },
-        ink: {
-          primary: "#e8f0f0",
-          secondary: "#8fa3a8",
-          dim: "#576269",
-          faint: "#333e44",
+        status: {
+          green: { bg: "#ecfdf5", border: "#a7f3d0", text: "#047857", dot: "#10b981" },
+          amber: { bg: "#fffbeb", border: "#fde68a", text: "#b45309", dot: "#f59e0b" },
+          red: { bg: "#fef2f2", border: "#fecaca", text: "#b91c1c", dot: "#ef4444" },
         },
       },
       fontFamily: {
-        mono: [
-          "JetBrains Mono",
-          "ui-monospace",
-          "Cascadia Code",
-          "SFMono-Regular",
-          "Consolas",
-          "monospace",
-        ],
-        display: ["Space Grotesk", "Segoe UI", "-apple-system", "sans-serif"],
+        sans: ["Inter", "-apple-system", "Segoe UI", "sans-serif"],
       },
       boxShadow: {
-        "glow-cyan": "0 0 0 1px rgba(62,230,216,0.25), 0 0 16px rgba(62,230,216,0.15)",
-        "glow-amber": "0 0 0 1px rgba(245,166,35,0.25), 0 0 16px rgba(245,166,35,0.15)",
-        "glow-red": "0 0 0 1px rgba(255,77,94,0.25), 0 0 16px rgba(255,77,94,0.15)",
-        "glow-green": "0 0 0 1px rgba(62,207,142,0.25), 0 0 16px rgba(62,207,142,0.15)",
+        card: "0 1px 2px 0 rgba(15, 37, 87, 0.06), 0 1px 3px 0 rgba(15, 37, 87, 0.08)",
+        "card-hover": "0 4px 12px 0 rgba(15, 37, 87, 0.10)",
       },
       keyframes: {
-        scan: {
-          "0%": { transform: "translateY(-100%)" },
-          "100%": { transform: "translateY(100%)" },
-        },
-        blink: {
+        "pulse-soft": {
           "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.15" },
+          "50%": { opacity: "0.5" },
         },
-        "pulse-ring": {
-          "0%": { transform: "scale(0.9)", opacity: "0.8" },
-          "100%": { transform: "scale(2.2)", opacity: "0" },
+        "scan-sweep": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
         },
       },
       animation: {
-        scan: "scan 4s linear infinite",
-        blink: "blink 1.6s step-start infinite",
-        "pulse-ring": "pulse-ring 2s cubic-bezier(0.2,0.6,0.4,1) infinite",
-      },
-      backgroundImage: {
-        grid: "linear-gradient(rgba(62,230,216,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(62,230,216,0.05) 1px, transparent 1px)",
-      },
-      backgroundSize: {
-        grid: "32px 32px",
+        "pulse-soft": "pulse-soft 1.8s ease-in-out infinite",
+        "scan-sweep": "scan-sweep 1.8s ease-in-out infinite",
       },
     },
   },

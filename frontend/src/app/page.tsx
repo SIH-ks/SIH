@@ -1,14 +1,14 @@
-import { HeaderBar } from "@/components/HeaderBar";
-import { Panel } from "@/components/Panel";
+import { AlertTriangle, Gauge, Sparkles, TrendingUp } from "lucide-react";
+
+import { MetricWidget } from "@/components/MetricWidget";
 import { ParcelTable } from "@/components/ParcelTable";
-import { IconAlert, IconCheck, IconLayers } from "@/components/icons";
+import { deriveTrafficLight } from "@/components/Badge";
 import { listParcels, usingDemoData } from "@/lib/api";
 
 /**
- * The console landing view: fleet-wide stat readouts, then the full parcel manifest.
- * Server component — the initial fetch runs server-side so the console is populated
- * on first paint, matching the rest of the app's "instrument panel" feel (no
- * client-side loading spinner flash on load).
+ * Command Dashboard: the landing view. Fleet-wide metric widgets frame the table,
+ * then the full records manifest with its traffic-light status column does the
+ * actual work of telling a reviewer where to look first.
  */
 export default async function DashboardPage() {
   let parcels: Awaited<ReturnType<typeof listParcels>> = [];
@@ -17,92 +17,64 @@ export default async function DashboardPage() {
   try {
     parcels = await listParcels({ limit: 100 });
   } catch {
-    fetchError = "BACKEND UNREACHABLE — expected FastAPI on :8000. Start it and reload.";
+    fetchError = "Could not reach the Adhikar API. Is the backend running on :8000?";
   }
 
   const demo = usingDemoData();
+  const total = parcels.length;
+  const flagged = parcels.filter((p) => deriveTrafficLight(p) === "red").length;
+  const needsReview = parcels.filter((p) => deriveTrafficLight(p) === "yellow").length;
+  const autoValidated = parcels.filter((p) => deriveTrafficLight(p) === "green").length;
 
-  const reviewCount = parcels.filter((p) => p.requires_human_review).length;
-  const approvedCount = parcels.filter((p) => p.recommended_action === "auto_approve").length;
-  const criticalCount = parcels.filter((p) => p.validation_highest_severity === "critical").length;
-  const meanMismatch =
-    parcels.length > 0
-      ? parcels.reduce((sum, p) => sum + (p.mismatch_score ?? 0), 0) / parcels.length
+  // "AI Accuracy" is approximated here as the mean extraction confidence across
+  // every record that has one -- a defensible proxy in the absence of a labelled
+  // ground-truth set, and exactly the number a reviewer cares about: how much to
+  // trust the average record before opening it.
+  const scored = parcels.filter((p) => p.confidence_score !== null);
+  const aiAccuracy =
+    scored.length > 0
+      ? Math.round((scored.reduce((sum, p) => sum + (p.confidence_score ?? 0), 0) / scored.length) * 1000) / 10
       : null;
 
   return (
     <div className="flex flex-col gap-6">
-      <HeaderBar demo={demo} />
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Command Dashboard</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Real-time overview of every digitized land record and its validation status.
+          {demo && (
+            <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+              Demo data
+            </span>
+          )}
+        </p>
+      </div>
 
-      <section className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatPanel icon={<IconLayers className="h-4 w-4" />} label="Parcels Extracted" value={parcels.length} />
-        <StatPanel
-          icon={<IconAlert className="h-4 w-4" />}
-          label="Awaiting Review"
-          value={reviewCount}
-          tone={reviewCount > 0 ? "amber" : "green"}
-        />
-        <StatPanel
-          icon={<IconCheck className="h-4 w-4" />}
-          label="Auto-Approved"
-          value={approvedCount}
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <MetricWidget icon={TrendingUp} label="Processing Volume" value={total} suffix="records" tone="navy" />
+        <MetricWidget
+          icon={Sparkles}
+          label="AI Accuracy"
+          value={aiAccuracy !== null ? aiAccuracy : "—"}
+          suffix={aiAccuracy !== null ? "%" : undefined}
           tone="green"
         />
-        <StatPanel
-          icon={<IconAlert className="h-4 w-4" />}
-          label="Critical Findings"
-          value={criticalCount}
-          tone={criticalCount > 0 ? "red" : "green"}
+        <MetricWidget icon={Gauge} label="Auto-Validated" value={autoValidated} tone="green" />
+        <MetricWidget
+          icon={AlertTriangle}
+          label="Flagged for Review"
+          value={needsReview + flagged}
+          tone={flagged > 0 ? "red" : "amber"}
         />
       </section>
 
       {fetchError ? (
-        <Panel eyebrow="System" title="Connection Fault">
-          <div className="flex items-center gap-2 px-4 py-6 font-mono text-xs text-signal-amber">
-            <IconAlert className="h-4 w-4 shrink-0" />
-            {fetchError}
-          </div>
-        </Panel>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800">
+          {fetchError}
+        </div>
       ) : (
-        <Panel eyebrow={`Mean mismatch ${meanMismatch !== null ? meanMismatch.toFixed(1) : "—"}/100`} title="Parcel Manifest" live>
-          <div className="p-3.5">
-            <ParcelTable parcels={parcels} />
-          </div>
-        </Panel>
+        <ParcelTable parcels={parcels} />
       )}
-    </div>
-  );
-}
-
-function StatPanel({
-  icon,
-  label,
-  value,
-  tone = "cyan",
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-  tone?: "cyan" | "amber" | "green" | "red";
-}) {
-  const toneClass = {
-    cyan: "text-signal-cyan",
-    amber: "text-signal-amber",
-    green: "text-signal-green",
-    red: "text-signal-red",
-  }[tone];
-
-  return (
-    <div className="hud-corners relative border border-seam bg-hull px-4 py-3.5 text-signal-cyan">
-      <span className="corner-tl" />
-      <span className="corner-br" />
-      <div className={`flex items-center gap-1.5 ${toneClass}`}>
-        {icon}
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-dim">{label}</span>
-      </div>
-      <div className={`mt-1.5 font-mono text-3xl font-semibold tabular-nums ${toneClass}`}>
-        {String(value).padStart(2, "0")}
-      </div>
     </div>
   );
 }

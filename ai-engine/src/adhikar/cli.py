@@ -50,7 +50,11 @@ def extract(
     geometries = _load_geometries(geometry) if geometry else None
 
     settings = get_settings()
-    console.print(f"[bold]Processing[/bold] {file} with model {settings.llm_model} (effort={settings.llm_effort})")
+    if settings.llm_provider == "groq":
+        model_desc = f"{settings.groq_model} (groq, json-mode)"
+    else:
+        model_desc = f"{settings.llm_model} (anthropic, effort={settings.llm_effort})"
+    console.print(f"[bold]Processing[/bold] {file} with {model_desc}")
 
     try:
         artifact = process_document(

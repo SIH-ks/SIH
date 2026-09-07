@@ -1,15 +1,21 @@
-"""Initial schema: documents, parcels, review_events, PostGIS extension.
+"""Initial schema: documents, parcels, review_events.
 
 Revision ID: 0001_initial_schema
 Revises:
 Create Date: 2026-09-07
+
+Note on ``geometry``: stored as plain JSONB (a raw GeoJSON object), not a PostGIS
+``Geography`` column -- see the docstring on
+``app.models.record.ParcelRecord.geometry`` for why. This migration targets
+Postgres specifically (SQLite dev uses ``Base.metadata.create_all()`` instead, see
+``app.main``'s lifespan handler), so it no longer needs the PostGIS extension at
+all.
 """
 
 from __future__ import annotations
 
 from typing import Sequence, Union
 
-import geoalchemy2
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
@@ -21,8 +27,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-
     op.create_table(
         "documents",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -57,16 +61,13 @@ def upgrade() -> None:
         sa.Column("survey_number", sa.String(64), nullable=True),
         sa.Column("total_area_sq_metre", sa.Numeric(18, 4), nullable=True),
         sa.Column("record_format", sa.String(32), nullable=False, server_default="unknown"),
-        sa.Column(
-            "geometry",
-            geoalchemy2.Geography(geometry_type="MULTIPOLYGON", srid=4326),
-            nullable=True,
-        ),
+        sa.Column("geometry", postgresql.JSONB, nullable=True),
         sa.Column("mismatch_score", sa.Float, nullable=True),
         sa.Column("confidence_score", sa.Float, nullable=True),
         sa.Column("recommended_action", sa.String(32), nullable=True),
         sa.Column("requires_human_review", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.Column("artifact_json", postgresql.JSONB, nullable=False),
+        sa.Column("page_image_urls", postgresql.JSONB, nullable=False, server_default="[]"),
         sa.Column("validation_issue_count", sa.Integer, nullable=False, server_default="0"),
         sa.Column("validation_highest_severity", sa.String(16), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),

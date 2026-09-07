@@ -8,9 +8,12 @@ engine tuning stays in the ai-engine package so the engine remains usable standa
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import Field, PostgresDsn
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class Settings(BaseSettings):
@@ -20,11 +23,20 @@ class Settings(BaseSettings):
     environment: str = "development"
     api_v1_prefix: str = "/api/v1"
 
-    database_url: PostgresDsn = Field(
-        default="postgresql+psycopg://adhikar:adhikar@localhost:5432/adhikar",
-        description="PostGIS-enabled PostgreSQL connection string.",
+    database_url: str = Field(
+        default=f"sqlite:///{_BACKEND_ROOT / 'data' / 'adhikar.db'}",
+        description=(
+            "SQLite by default -- zero setup, no Docker/Postgres required, and "
+            "geometry is stored as portable JSON rather than a PostGIS column (see "
+            "app.models.record.ParcelRecord.geometry) so the same models work "
+            "unchanged against either backend. Point this at a "
+            "'postgresql+psycopg://...' URL for a production deployment; nothing "
+            "else in this module needs to change."
+        ),
     )
     redis_url: str = "redis://localhost:6379/0"
+    """Unused while ingestion runs synchronously (see app.api.v1.routers.upload) --
+    reserved for the Celery worker path in a production deployment."""
 
     jwt_secret: str = Field(default="change-me-in-production", repr=False)
     jwt_algorithm: str = "HS256"
@@ -32,6 +44,11 @@ class Settings(BaseSettings):
 
     object_storage_bucket: str = "adhikar-scans"
     object_storage_endpoint: str | None = None  # set for MinIO; None uses AWS default
+
+    local_storage_dir: Path = _BACKEND_ROOT / "data" / "uploads"
+    """Where original scans and rendered page images land when no object-storage
+    endpoint is configured -- the zero-setup path `ingest_upload` actually uses
+    today. Served back to the frontend via the `/static` mount in `app.main`."""
 
     cors_allow_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 

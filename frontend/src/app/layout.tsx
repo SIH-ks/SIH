@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+
+import { TopNav } from "@/components/TopNav";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -8,9 +11,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark">
-      <body className="vignette grid-backdrop relative min-h-screen bg-void font-display text-ink-primary antialiased">
-        <div className="relative z-10 mx-auto max-w-[1400px] px-6 py-6">{children}</div>
+    <html lang="en">
+      <body className="min-h-screen bg-slate-50 font-sans text-slate-900 antialiased">
+        <TopNav />
+        <main className="mx-auto max-w-[1400px] px-6 py-8">{children}</main>
       </body>
     </html>
   );

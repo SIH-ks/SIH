@@ -30,7 +30,7 @@ Scan (PDF/image)
 │  load → preprocess → OCR ensemble → table-grid detection                │
 │                              │                                          │
 │                              ▼                                          │
-│              Vision LLM (Claude Opus 5, strict tool use)                │
+│           Vision LLM (Groq free tier, default | Claude Opus 5)          │
 │                              │                                          │
 │                              ▼                                          │
 │         normalize (numerals/areas/vocab) → map to domain model          │
@@ -59,9 +59,9 @@ cd ai-engine
 python -m venv .venv && .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 pip install -e .
-cp .env.example .env                                 # then `ant auth login` or set ANTHROPIC_API_KEY
+cp .env.example .env                     # then set GROQ_API_KEY (free: console.groq.com/keys)
 
-pytest                                                 # 65 tests, no network/API calls needed
+pytest                                                 # 72 tests, no network/API calls needed
 adhikar extract path/to/scan.pdf --format satbara_7_12 --output artifact.json
 adhikar list-rules
 ```
@@ -93,7 +93,7 @@ npm run dev                                # http://localhost:3000
 | `adhikar.preprocessing` | PDF/image loading (`pypdfium2`), deskew/denoise/threshold (`OpenCV`, with a NumPy-only fallback) |
 | `adhikar.ocr` | EasyOCR + Tesseract adapters behind one interface, reconciled by IoU-based ensemble merging |
 | `adhikar.layout` | Ruled-line table-grid detection via morphological line extraction |
-| `adhikar.llm` | Strict-tool-use Vision LLM extraction (Claude Opus 5), with prompt caching and refusal handling |
+| `adhikar.llm` | Vision LLM extraction behind a provider factory — Groq (free tier, JSON-mode + repair) by default, Anthropic Claude Opus 5 (strict tool use + prompt caching) as the higher-accuracy option |
 | `adhikar.normalize` | Deterministic numeral/area/vocabulary normalization — the vernacular-term resolver that keeps classification out of the model's hands |
 | `adhikar.validation` | 22 data-driven consistency rules (arithmetic, ownership, mutation chain, encumbrance), parameterized by `policies/validation_policy.yaml` |
 | `adhikar.geo` | Geodesic area computation (`pyproj`), topology (overlap/gap) detection, and the Confidence & Mismatch scoring model |

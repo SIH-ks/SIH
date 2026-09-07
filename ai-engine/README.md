@@ -12,14 +12,25 @@ pip install -e .
 cp .env.example .env
 ```
 
-Credentials for the Vision LLM resolve through the standard Anthropic SDK chain
-(`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `ant auth login`) — nothing in this
-package reads or logs a key directly.
+## Vision LLM provider
+
+Two interchangeable backends, selected by `ADHIKAR_LLM_PROVIDER` (default `groq`):
+
+| Provider | `ADHIKAR_LLM_PROVIDER` | Credential | Structured output |
+|---|---|---|---|
+| **Groq** (default) | `groq` | `GROQ_API_KEY` — free, no billing setup: https://console.groq.com/keys | JSON mode + schema-in-prompt + validate-and-repair (up to `ADHIKAR_GROQ_MAX_JSON_REPAIR_ATTEMPTS` retries on a parse/validation failure) |
+| **Anthropic** | `anthropic` | `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ant auth login` | Strict tool use — schema-valid by construction, plus prompt caching |
+
+Groq is the default so the pipeline runs end-to-end on a free key; switch to
+Anthropic (`ADHIKAR_LLM_PROVIDER=anthropic` in `.env`) for materially stronger
+accuracy on dense multilingual tables once a paid key is available. Neither
+credential is ever read, logged, or held by `adhikar` itself — each SDK resolves its
+own key from the environment. See `.env.example` for every knob.
 
 ## Run the tests
 
 ```bash
-pytest            # 65 tests; no network access or API credentials required
+pytest            # 72 tests; no network access or API credentials required
 pytest --cov=adhikar
 ```
 
@@ -171,7 +182,7 @@ src/adhikar/
 ├── preprocessing/  PDF/image loading, deskew/denoise/threshold
 ├── ocr/            EasyOCR + Tesseract adapters, IoU-based ensemble reconciliation
 ├── layout/         Ruled-line table-grid detection
-├── llm/            Strict-tool-use Vision LLM extraction + prompt + wire-to-domain mapper
+├── llm/            Groq / Anthropic Vision LLM extraction (provider factory) + prompt + wire-to-domain mapper
 ├── normalize/      Numerals, area parsing, vernacular vocabulary, shares, dates
 ├── validation/     Rule registry + 22 rules + YAML policy loader
 ├── geo/            Geodesic area, topology, discrepancy scoring

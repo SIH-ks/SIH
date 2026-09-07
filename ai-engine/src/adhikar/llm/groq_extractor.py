@@ -25,11 +25,12 @@ free-tier rate limits this is a non-issue in practice.
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
 from pydantic import ValidationError
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 import numpy as np
 
@@ -59,6 +60,52 @@ must be present (use `null` for a field you have no value for -- never omit it).
 {schema}
 ```
 """
+
+
+_SCHEMA_KEY_PRESERVING_CONTAINERS = ("properties", "$defs")
+"""Object keys under these are field/type *names*, never schema metadata -- see the
+:func:`_compact_schema_for_prompt` docstring for why that distinction is load-bearing."""
+
+
+def _compact_schema_for_prompt(schema: dict[str, Any]) -> dict[str, Any]:
+    """Shrink the JSON Schema before it goes into the prompt as literal tokens.
+
+    ``LlmExtraction.model_json_schema()`` is written for a human reading Pydantic
+    docs -- every field carries a ``description`` (often a full sentence) and a
+    redundant ``title`` (the field name, re-cased). Embedded verbatim, the full
+    schema for this domain model runs to ~4,300 tokens; on Groq's free tier that
+    alone eats most of a request's budget before the image or system prompt are
+    counted (see the module docstring). ``description``/``title`` exist for
+    documentation, not for constraining the model's output shape, so they are
+    dropped here -- structurally the schema (types, ``required``, ``enum``, ``$ref``)
+    is untouched, and the *actual* :class:`LlmExtraction` class keeps its full
+    docstrings for IDE/dev use regardless of what this function does.
+
+    A naive "drop every ``description``/``title`` key at every level" is wrong: a
+    ``properties`` (or ``$defs``) object's own keys are field (or type) *names*, not
+    metadata, and this schema genuinely has a field called ``description``
+    (:attr:`~adhikar.schemas.llm_contract.UnreadableRegion.description`). Filtering
+    those keys the same way as metadata keys would silently delete that field from
+    the compacted schema -- the model would never be told to produce it, `required`
+    would go stale, and every document with an unreadable region would fail
+    downstream Pydantic validation against the *real*, uncompacted
+    :class:`LlmExtraction` for a reason nothing in the prompt explains. So a
+    ``properties``/``$defs`` mapping's immediate keys are always preserved verbatim;
+    only their *values* (each itself a schema) are compacted recursively.
+    """
+    if isinstance(schema, dict):
+        result: dict[str, Any] = {}
+        for key, value in schema.items():
+            if key in ("description", "title"):
+                continue
+            if key in _SCHEMA_KEY_PRESERVING_CONTAINERS and isinstance(value, dict):
+                result[key] = {name: _compact_schema_for_prompt(sub) for name, sub in value.items()}
+            else:
+                result[key] = _compact_schema_for_prompt(value)
+        return result
+    if isinstance(schema, list):
+        return [_compact_schema_for_prompt(item) for item in schema]
+    return schema
 
 
 def _strip_code_fence(text: str) -> str:
@@ -118,9 +165,12 @@ class GroqVisionExtractor:
             raise LlmExtractionError("extract() requires at least one page image")
 
         client = self._ensure_client()
-        schema = LlmExtraction.model_json_schema()
+        compact_schema = _compact_schema_for_prompt(LlmExtraction.model_json_schema())
+        # No indent=2: compact JSON is what actually gets tokenized and billed
+        # against the free tier's per-minute input budget, and pretty-printing
+        # roughly doubles the byte count for whitespace the model doesn't need.
         system_prompt = EXTRACTION_SYSTEM_PROMPT + _JSON_MODE_APPENDIX.format(
-            schema=json.dumps(schema, indent=2)
+            schema=json.dumps(compact_schema, separators=(",", ":"))
         )
 
         content: list[dict[str, Any]] = []
@@ -202,12 +252,32 @@ class GroqVisionExtractor:
 
     def _call_with_retry(self, client: object, **kwargs: object) -> object:
         """Retry on transient failures only; a validation failure is handled by the
-        repair loop in :meth:`extract`, not here."""
+        repair loop in :meth:`extract`, not here.
+
+        Rate limits get their wait time from Groq's own response headers rather than
+        a guessed exponential backoff. This matters concretely on the free tier: its
+        per-minute token budget is small enough that one extraction call can consume
+        most of it, and the reset window is measured in tens of seconds -- a
+        1s/2s/4s exponential backoff never gets there and every retry just fails
+        again. ``x-ratelimit-reset-tokens`` (confirmed present on live Groq
+        responses; a Go-style duration string like ``"12.342s"`` or ``"130ms"``) or
+        the standard ``retry-after`` header give the real number instead.
+        """
+
+        def _wait_seconds(retry_state) -> float:  # noqa: ANN001 - tenacity's RetryCallState
+            outcome = retry_state.outcome
+            exc = outcome.exception() if outcome is not None else None
+            header_wait = _retry_after_seconds(exc) if exc is not None else None
+            if header_wait is not None:
+                return min(header_wait + 0.5, 65.0)  # small safety margin, sane ceiling
+            # No usable header (a 5xx or a connection error, not a rate limit):
+            # a short exponential backoff is the right shape for those.
+            return min(1.0 * (2 ** (retry_state.attempt_number - 1)), 30.0)
 
         @retry(
             reraise=True,
             stop=stop_after_attempt(self._settings.llm_max_retries + 1),
-            wait=wait_exponential(multiplier=1, min=1, max=30),
+            wait=_wait_seconds,
             retry=retry_if_exception_type(_TransientGroqError),
         )
         def _attempt() -> object:
@@ -237,3 +307,49 @@ class GroqVisionExtractor:
 
 class _TransientGroqError(Exception):
     """Internal marker for tenacity's retry predicate. Never escapes this module."""
+
+
+_GO_DURATION_COMPONENT = re.compile(r"(\d+(?:\.\d+)?)(h|ms|m|s)")
+"""Matches one component of a Go-style duration string. ``ms`` is checked before the
+bare ``m``/``s`` alternatives so "130ms" is not misread as "130m" + a stray "s"."""
+
+
+def _parse_go_duration(text: str) -> float | None:
+    """Parse a Go-style duration (``"12.342s"``, ``"130ms"``, ``"1m2.5s"``) to seconds.
+
+    Returns ``None`` for a string with no recognisable component, rather than 0 --
+    an unparseable header must fall through to the exponential-backoff default, not
+    be read as "wait zero seconds."
+    """
+    total = 0.0
+    matched = False
+    for value, unit in _GO_DURATION_COMPONENT.findall(text):
+        matched = True
+        seconds_per_unit = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 0.001}[unit]
+        total += float(value) * seconds_per_unit
+    return total if matched else None
+
+
+def _retry_after_seconds(exc: BaseException) -> float | None:
+    """Extract a server-authoritative retry delay from a wrapped Groq exception.
+
+    ``exc`` is the :class:`_TransientGroqError` raised in :meth:`_call_with_retry`,
+    whose ``__cause__`` is the original ``groq.APIStatusError`` carrying the HTTP
+    response. Checks the standard ``retry-after`` header first (seconds, per RFC
+    9110), then Groq's own ``x-ratelimit-reset-tokens``. Returns ``None`` when
+    neither is present or parseable -- e.g. a connection error has no response at
+    all -- so the caller falls back to exponential backoff.
+    """
+    response = getattr(exc.__cause__, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+
+    retry_after = headers.get("retry-after")
+    if retry_after is not None:
+        try:
+            return float(retry_after)
+        except ValueError:
+            pass  # some gateways send an HTTP-date instead of a seconds count here
+
+    return _parse_go_duration(headers.get("x-ratelimit-reset-tokens", ""))

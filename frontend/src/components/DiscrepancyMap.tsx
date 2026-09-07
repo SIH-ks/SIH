@@ -2,10 +2,9 @@
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
+import { Crosshair } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { type Map as MapLibreMap } from "maplibre-gl";
-
-import { IconTarget } from "./icons";
 
 export interface DiscrepancyMapProps {
   geometry: GeoJSON.Geometry | null;
@@ -17,9 +16,16 @@ export interface DiscrepancyMapProps {
 /**
  * The parcel's cadastral polygon on a dark basemap, colored by mismatch severity,
  * with a genuine glow (MapLibre's `line-blur` paint property — not a CSS filter
- * hack) rather than a plain outline. CartoDB's "dark matter" raster tiles are used
- * because they need no API key, which matters for a scaffold meant to run with zero
- * external account setup.
+ * hack) rather than a plain outline.
+ *
+ * Basemap: Esri's public "World Dark Gray Base" tile service, which needs no API
+ * key or account — matters for a scaffold meant to run with zero external setup.
+ * (CARTO's basemaps.cartocdn.com dark tiles, used here originally, now require a
+ * registered API key and render an "API KEY REQUIRED" watermark without one — a
+ * policy change on their end, not a MapLibre or app issue.) Esri's tile scheme
+ * orders path segments `{z}/{y}/{x}` — swapped from the `{z}/{x}/{y}` XYZ
+ * convention most other providers (including CARTO) use — so don't copy this URL
+ * shape onto a different provider without checking its own tile scheme.
  */
 export function DiscrepancyMap({ geometry, mismatchScore, parcelKey, neighbourGeometries = [] }: DiscrepancyMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -37,12 +43,28 @@ export function DiscrepancyMap({ geometry, mismatchScore, parcelKey, neighbourGe
         sources: {
           basemap: {
             type: "raster",
-            tiles: ["https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"],
+            tiles: [
+              "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+            ],
             tileSize: 256,
-            attribution: "© OpenStreetMap contributors © CARTO",
+            maxzoom: 16,
+            attribution: "© Esri",
+          },
+          // Esri's dark basemap has no zoom level past 16; a reference/label layer
+          // fills in road and place names on top at any zoom, including closer in.
+          reference: {
+            type: "raster",
+            tiles: [
+              "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+            ],
+            tileSize: 256,
+            attribution: "© Esri",
           },
         },
-        layers: [{ id: "basemap", type: "raster", source: "basemap", paint: { "raster-opacity": 0.85 } }],
+        layers: [
+          { id: "basemap", type: "raster", source: "basemap", paint: { "raster-opacity": 0.85 } },
+          { id: "reference", type: "raster", source: "reference", paint: { "raster-opacity": 0.6 } },
+        ],
       },
       center: [78.9629, 20.5937],
       zoom: 4,
@@ -81,48 +103,47 @@ export function DiscrepancyMap({ geometry, mismatchScore, parcelKey, neighbourGe
   }, [geometry, mismatchScore]);
 
   return (
-    <div className="hud-corners relative border border-seam bg-hull text-signal-cyan">
-      <span className="corner-tl" />
-      <span className="corner-br" />
-      <div className="flex items-center justify-between border-b border-seam bg-plate px-3.5 py-2">
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-card">
+      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
         <div className="flex items-center gap-2">
-          <IconTarget className="h-3.5 w-3.5 text-signal-cyan" />
-          <span className="font-display text-xs font-semibold uppercase tracking-wide text-ink-primary">
-            Geospatial Cross-Reference
-          </span>
+          <Crosshair className="h-4 w-4 text-navy-700" />
+          <span className="text-sm font-semibold text-slate-700">Geospatial Cross-Reference</span>
         </div>
-        <span className="font-mono text-[10px] text-ink-dim">PARCEL {parcelKey}</span>
+        <span className="font-mono text-[11px] text-slate-400">Parcel {parcelKey}</span>
       </div>
 
+      {/* The map canvas itself stays dark regardless of the surrounding page theme
+          -- a dark basemap inside a light dashboard is the industry-standard look
+          (Mapbox/Google dark map styles embedded in light admin panels), and the
+          mismatch-colored glow reads better against it than against a light tile set. */}
       <div className="relative">
-        <div ref={containerRef} className="h-[420px] w-full" />
+        <div ref={containerRef} className="h-[360px] w-full" />
 
-        {/* telemetry overlay — coordinates + zoom, styled like a map HUD readout */}
-        <div className="pointer-events-none absolute bottom-2 left-2 flex flex-col gap-0.5 bg-void/70 px-2 py-1 font-mono text-[10px] text-signal-cyan backdrop-blur-sm">
+        <div className="pointer-events-none absolute bottom-2 left-2 flex flex-col gap-0.5 rounded bg-black/60 px-2 py-1 font-mono text-[10px] text-emerald-300 backdrop-blur-sm">
           <span>LAT {coords ? coords.lat.toFixed(5) : "—"}</span>
           <span>LON {coords ? coords.lng.toFixed(5) : "—"}</span>
           <span>ZOOM {zoom.toFixed(1)}</span>
         </div>
 
         {!geometry && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-void/60">
-            <span className="border border-signal-amber/40 bg-signal-amber/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-signal-amber">
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/50">
+            <span className="rounded-full bg-amber-400/90 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-950">
               No cadastral geometry matched
             </span>
           </div>
         )}
       </div>
 
-      <div className="flex items-center gap-4 border-t border-seam bg-plate px-3.5 py-2 font-mono text-[10px] text-ink-dim">
+      <div className="flex items-center gap-4 border-t border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
         {(
           [
-            ["#3ecf8e", "Within tolerance"],
-            ["#f5a623", "Minor / material"],
-            ["#ff4d5e", "Severe"],
+            ["#10b981", "Within tolerance"],
+            ["#f59e0b", "Minor / material"],
+            ["#ef4444", "Severe"],
           ] as const
         ).map(([color, label]) => (
           <span key={label} className="flex items-center gap-1.5">
-            <span className="inline-block h-1.5 w-1.5" style={{ backgroundColor: color, boxShadow: `0 0 6px ${color}` }} />
+            <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
             {label}
           </span>
         ))}

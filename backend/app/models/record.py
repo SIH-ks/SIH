@@ -15,12 +15,15 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from geoalchemy2 import Geography
 from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.base import Base
+
+_JSONB_OR_JSON = JSONB().with_variant(JSON(), "sqlite")
+"""JSONB on Postgres, plain JSON on SQLite -- the one column-type difference this
+schema still needs between the two backends every other column already tolerates."""
 
 
 class Document(Base):
@@ -69,18 +72,38 @@ class ParcelRecord(Base):
     total_area_sq_metre: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     record_format: Mapped[str] = mapped_column(String(32), default="unknown")
 
-    geometry: Mapped[str | None] = mapped_column(
-        Geography(geometry_type="MULTIPOLYGON", srid=4326), nullable=True
-    )
-    """Matched cadastral polygon, when the discrepancy engine found one."""
+    geometry: Mapped[dict | None] = mapped_column(_JSONB_OR_JSON, nullable=True)
+    """Matched cadastral polygon, when the discrepancy engine found one -- stored as
+    a raw GeoJSON ``Polygon``/``MultiPolygon`` object.
+
+    Deliberately a portable JSON column rather than GeoAlchemy2's PostGIS-specific
+    ``Geography`` type: nothing in this API layer runs a spatial SQL query against
+    it (``ST_Intersects``, ``ST_Area``, ...) -- the discrepancy engine already
+    computes geodesic area and topology in the ai-engine (shapely + pyproj) before
+    this row is ever written, so the column only ever needs to store and return the
+    polygon, not query on its shape. That lets the same model run unchanged against
+    SQLite (no PostGIS/Docker required for local dev) and Postgres alike. A
+    production deployment that *does* want to query by geometry (e.g. "parcels
+    within this village boundary") would reintroduce a real PostGIS column
+    alongside this one rather than replacing it -- that's an additive migration,
+    not a breaking change to what's here.
+    """
 
     mismatch_score: Mapped[float | None] = mapped_column(nullable=True, index=True)
     confidence_score: Mapped[float | None] = mapped_column(nullable=True, index=True)
     recommended_action: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     requires_human_review: Mapped[bool] = mapped_column(default=False, index=True)
 
-    artifact_json: Mapped[dict] = mapped_column(JSONB().with_variant(JSON(), "sqlite"))
-    """The complete LandParcelRecord + provenance, as the ai-engine produced it."""
+    artifact_json: Mapped[dict] = mapped_column(_JSONB_OR_JSON)
+    """The complete LandParcelRecord, plus per-field provenance (bbox, confidence,
+    extractor) and this parcel's validation issues -- see
+    ``app.services.ingestion._build_parcel_row`` for exactly what's folded in."""
+
+    page_image_urls: Mapped[list] = mapped_column(JSON, default=list)
+    """Relative ``/static/...`` URLs of the source document's rendered pages, in
+    order -- what the frontend's Document Viewer actually displays. Denormalized
+    from the parent :class:`Document` onto each parcel row so a parcel-detail fetch
+    never needs a second round trip for something the viewer always needs."""
 
     validation_issue_count: Mapped[int] = mapped_column(default=0)
     validation_highest_severity: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)

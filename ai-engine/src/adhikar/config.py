@@ -1,9 +1,19 @@
 """Runtime configuration, sourced from the environment.
 
 Everything tunable lives here so behaviour is reproducible from a recorded settings
-snapshot. Nothing in this module reads a secret at import time -- the Anthropic SDK
-resolves credentials itself (``ANTHROPIC_API_KEY``, ``ANTHROPIC_AUTH_TOKEN``, or an
-``ant auth login`` profile), so no key is ever held in a field or logged.
+snapshot. Nothing in this module reads a secret into a field or logs one -- each
+provider SDK resolves its own credential directly from the process environment
+(``GROQ_API_KEY`` for Groq; ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` / an
+``ant auth login`` profile for Anthropic).
+
+That last point is why this module loads ``.env`` into the *process* environment
+via ``python-dotenv`` at import time, in addition to ``pydantic-settings``' own
+``env_file`` support below: ``pydantic-settings`` only uses an env file to populate
+its own ``ADHIKAR_``-prefixed fields on :class:`Settings` -- it never calls
+``os.environ[...] = ...``, so a bare API key sitting in ``.env`` would otherwise be
+invisible to the Groq/Anthropic SDKs, which read ``os.environ`` directly. The
+``load_dotenv`` call never overwrites a variable already set in the real
+environment (``override=False``), so an explicit `export`/CI secret always wins.
 """
 
 from __future__ import annotations
@@ -12,12 +22,21 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .exceptions import ConfigurationError
 
 __all__ = ["Settings", "get_settings"]
+
+# Populate os.environ from .env (ai-engine/.env, then a parent .env) before anything
+# below -- or any provider SDK constructed later -- reads a credential. Silent when
+# no file is present, which is the normal case in a deployed environment where
+# credentials come from the platform instead.
+_PACKAGE_ROOT_FOR_DOTENV = Path(__file__).resolve().parent.parent.parent
+load_dotenv(_PACKAGE_ROOT_FOR_DOTENV / ".env", override=False)
+load_dotenv(_PACKAGE_ROOT_FOR_DOTENV.parent / ".env", override=False)
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 _PROJECT_ROOT = _PACKAGE_ROOT.parent.parent
@@ -72,11 +91,23 @@ class Settings(BaseSettings):
     :class:`~adhikar.llm.groq_extractor.GroqVisionExtractor`."""
 
     # -- Groq provider ------------------------------------------------------------------
-    groq_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
-    """A vision-capable model on Groq's free tier. Groq's model catalog moves faster
-    than most providers' (preview models are retired on short notice) -- if this ID
-    stops resolving, list current models at https://console.groq.com/docs/models
-    (filter for vision support) and override via ADHIKAR_GROQ_MODEL."""
+    groq_model: str = "qwen/qwen3.8-27b"
+    """A vision-capable model on Groq's free tier, confirmed live against
+    ``client.models.list()`` -- each entry's ``input_modalities`` field says whether
+    it accepts images (``["text", "image"]``) or text only. Groq's catalog moves
+    faster than most providers' (models are added and retired on short notice), so
+    if this ID stops resolving, find the current vision-capable one yourself rather
+    than guessing from a model name:
+
+    ```python
+    import groq
+    for m in groq.Groq().models.list().data:
+        if "image" in m.input_modalities:
+            print(m.id, m.supported_features)
+    ```
+
+    then override via ADHIKAR_GROQ_MODEL. Prefer one whose `supported_features`
+    includes `json_mode` -- required by :class:`~adhikar.llm.groq_extractor.GroqVisionExtractor`."""
 
     groq_max_completion_tokens: int = 8_000
     groq_max_json_repair_attempts: int = 2

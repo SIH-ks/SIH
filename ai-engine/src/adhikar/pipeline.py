@@ -26,6 +26,7 @@ from .geo.discrepancy import ConfidenceInputs, compute_discrepancy
 from .layout.tables import assign_tokens_to_grid, detect_table_grids
 from .llm.base import VisionExtractorProtocol
 from .llm.factory import build_extractor
+from .llm.bbox_attribution import attach_bboxes
 from .llm.mapper import index_field_confidences, map_extraction
 from .ocr.ensemble import run_ocr_ensemble
 from .preprocessing.enhance import prepare_page
@@ -47,7 +48,7 @@ def process_document(
     declared_format: RecordFormat = RecordFormat.UNKNOWN,
     geometries_by_parcel_key: dict[str, ParcelGeometry] | None = None,
     neighbour_geometries_by_parcel_key: dict[str, list[ParcelGeometry]] | None = None,
-    extractor: VisionExtractor | None = None,
+    extractor: VisionExtractorProtocol | None = None,
 ) -> ExtractionArtifact:
     """Run the full pipeline over one scanned document.
 
@@ -56,7 +57,8 @@ def process_document(
         discrepancy engine -- every parcel then simply has no geometry match, which
         is reported honestly (see :data:`~adhikar.schemas.geo.NO_GEOMETRY_CONFIDENCE_CAP`)
         rather than being silently absent.
-    :param extractor: Injected for testing; constructed from settings otherwise.
+    :param extractor: Injected for testing; otherwise built by
+        :func:`adhikar.llm.factory.build_extractor` from ``settings.llm_provider``.
     :raises AdhikarError: (or a subclass) on any stage failure that is not a
         recorded, non-fatal degradation.
     """
@@ -102,7 +104,7 @@ def process_document(
     metadata.record_stage("ocr_layout", (time.monotonic() - t0) * 1000)
 
     t0 = time.monotonic()
-    vision_extractor = extractor or VisionExtractor(settings=settings)
+    vision_extractor = extractor or build_extractor(settings)
     document_hint = (
         f"Declared record format: {loaded.source.declared_record_format.value}. "
         f"File: {loaded.source.file_name}."
@@ -125,6 +127,12 @@ def process_document(
         region_key=settings.default_bigha_region,
     )
     metadata.warnings.extend(mapping.warnings)
+    # The LLM never reports pixel coordinates -- this recovers them after the fact
+    # by fuzzy-matching each field's transcribed text against the OCR ensemble's
+    # own line boxes, so the reviewer console can point at a field's real source
+    # location instead of simulating one. See the module docstring for why a
+    # low-confidence match is left unset rather than guessed.
+    mapping.provenance = attach_bboxes(mapping.provenance, page_ocr_results)
     metadata.record_stage("normalize_map", (time.monotonic() - t0) * 1000)
 
     detected_format = _wire_format_to_enum(extraction_result.extraction.detected_record_format)

@@ -53,6 +53,17 @@ class ParcelDetail(ParcelSummary):
     """Full artifact for one parcel -- the reviewer console's detail/edit view."""
 
     artifact_json: dict
+    """The LandParcelRecord dump, plus ``provenance`` (per-field bbox/confidence)
+    and ``validation_issues`` folded in -- see ``services.ingestion._build_parcel_row``."""
+
+    geometry: dict | None = None
+    """Matched cadastral polygon as raw GeoJSON, when the discrepancy engine found
+    one. ``None`` is the expected, honest state for a real upload when no cadastral
+    geometry source is configured -- not an error."""
+
+    page_image_urls: list[str] = []
+    """Relative ``/static/...`` URLs of the source document's rendered pages, for
+    the Document Viewer."""
 
 
 class ReviewCorrectionRequest(BaseModel):

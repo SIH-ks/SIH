@@ -17,6 +17,13 @@ import type { ParcelDetail, ParcelListFilters, ParcelSummary, UploadResponse } f
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const DEMO_ALLOWED = process.env.NEXT_PUBLIC_ALLOW_DEMO_DATA !== "false";
 
+/** The backend's origin with no path -- `page_image_urls` come back as
+ * server-relative paths (`/static/uploads/...`), so building an `<img src>` needs
+ * this, not `API_BASE` (which carries the `/api/v1` prefix). Derived from
+ * `API_BASE` rather than a second env var so the two can never point at different
+ * hosts by accident. */
+export const API_ORIGIN = API_BASE.replace(/\/api\/v\d+\/?$/, "");
+
 class ApiError extends Error {
   constructor(
     message: string,

@@ -7,16 +7,19 @@ engine's API can change without touching the request-handling layer.
 
 from __future__ import annotations
 
+import re
 import tempfile
 import uuid
 from pathlib import Path
 
 from adhikar.exceptions import AdhikarError
 from adhikar.pipeline import process_document
+from adhikar.preprocessing.loader import load_document
 from adhikar.schemas.artifact import ExtractionArtifact
 from adhikar.schemas.enums import RecordFormat
 from sqlalchemy.orm import Session
 
+from ..core.config import get_settings
 from ..models.record import Document, ParcelRecord
 
 
@@ -28,6 +31,9 @@ class IngestionError(Exception):
         self.cause = cause
 
 
+_PARCEL_PATH_PREFIX = re.compile(r"^\$\.parcels\[(\d+)\]\.")
+
+
 def ingest_upload(
     db: Session,
     *,
@@ -35,30 +41,51 @@ def ingest_upload(
     file_name: str,
     declared_format: RecordFormat = RecordFormat.UNKNOWN,
     uploaded_by: str | None = None,
-    storage_key_prefix: str = "scans",
 ) -> tuple[Document, list[ParcelRecord]]:
     """Run the extraction pipeline on an uploaded file and persist the result.
 
-    The original bytes are written to a temp file for the pipeline to rasterise (it
-    operates on paths, since PDF rendering libraries need random access) and then --
-    in a production deployment -- uploaded to object storage under
-    ``storage_key_prefix``; that upload call is elided here and left as an integration
-    point (``boto3`` is already a backend dependency) so this module stays testable
-    without live cloud credentials.
+    The original bytes go to a temp file for the pipeline to rasterise (it operates
+    on paths, since PDF rendering needs random access), then both the original and
+    each rendered page get written to local disk under
+    ``settings.local_storage_dir`` -- the zero-setup storage backend this reference
+    implementation actually uses. A production deployment would upload to S3/MinIO
+    instead (``boto3`` is already a dependency); swapping that in means changing
+    this function's storage calls, not its callers or the response shape, since the
+    persisted URLs are already opaque strings as far as everything downstream is
+    concerned.
     """
+    settings = get_settings()
     suffix = Path(file_name).suffix or ".pdf"
+
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(file_bytes)
         tmp_path = Path(tmp.name)
 
     try:
         artifact = process_document(tmp_path, declared_format=declared_format)
+        # A second, lightweight load just for the raw page rasters -- the pipeline's
+        # own artifact deliberately carries OCR text (PageOcr), never pixel data, so
+        # there is no way to get the images the Document Viewer needs out of it
+        # directly. Re-decoding a multi-page PDF and rasterising a handful of pages
+        # a second time costs a fraction of a second next to the OCR/LLM stages that
+        # already ran, so it isn't worth threading pixel data through the artifact
+        # schema just to avoid it.
+        #
+        # No `settings=` here: `load_document` defaults to the ai-engine's own
+        # `adhikar.config.Settings` when omitted. The backend's `settings` variable
+        # in scope below is a same-named but unrelated class (this module's own
+        # `app.core.config.Settings`) -- passing it here would be a type mismatch,
+        # not an override.
+        loaded = load_document(tmp_path, document_id=artifact.document.document_id)
     except AdhikarError as exc:
         raise IngestionError(f"extraction failed for {file_name}: {exc}", cause=exc) from exc
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    storage_key = f"{storage_key_prefix}/{artifact.document.sha256}{suffix}"
+    page_image_urls = _persist_pages(
+        settings.local_storage_dir, sha256=artifact.document.sha256, original_bytes=file_bytes,
+        original_suffix=suffix, pages=loaded.pages,
+    )
 
     document = Document(
         id=uuid.uuid4(),
@@ -70,13 +97,16 @@ def ingest_upload(
         declared_record_format=artifact.document.declared_record_format.value,
         declared_state=artifact.document.declared_state,
         source_system=artifact.document.source_system,
-        storage_key=storage_key,
+        storage_key=f"local/{artifact.document.sha256}{suffix}",
         uploaded_by=uploaded_by,
     )
     db.add(document)
     db.flush()  # assigns document.id for the FK below without committing yet
 
-    parcel_rows = [_build_parcel_row(document.id, artifact, index) for index in range(len(artifact.parcels))]
+    parcel_rows = [
+        _build_parcel_row(document.id, artifact, index, page_image_urls=page_image_urls)
+        for index in range(len(artifact.parcels))
+    ]
     db.add_all(parcel_rows)
     db.commit()
     for row in parcel_rows:
@@ -85,7 +115,55 @@ def ingest_upload(
     return document, parcel_rows
 
 
-def _build_parcel_row(document_id: uuid.UUID, artifact: ExtractionArtifact, index: int) -> ParcelRecord:
+def _persist_pages(
+    storage_dir: Path, *, sha256: str, original_bytes: bytes, original_suffix: str, pages: list
+) -> list[str]:
+    """Write the original file and each rendered page PNG to local disk.
+
+    Returns the ``/static/...`` URLs `app.main` serves them under. Keyed by content
+    hash rather than document ID so re-uploading the identical scan overwrites the
+    same files instead of accumulating duplicates.
+    """
+    from PIL import Image
+
+    doc_dir = storage_dir / sha256
+    doc_dir.mkdir(parents=True, exist_ok=True)
+
+    (doc_dir / f"original{original_suffix}").write_bytes(original_bytes)
+
+    urls: list[str] = []
+    for page in pages:
+        page_path = doc_dir / f"page-{page.page_index}.png"
+        Image.fromarray(page.image).save(page_path, format="PNG")
+        urls.append(f"/static/uploads/{sha256}/page-{page.page_index}.png")
+    return urls
+
+
+def _provenance_for_parcel(artifact: ExtractionArtifact, index: int) -> dict[str, dict]:
+    """Real per-field bbox/confidence for one parcel, re-keyed relative to it.
+
+    ``artifact.provenance`` is keyed by absolute paths like
+    ``"$.parcels[0].owners[0].name.raw_name"``; the frontend only ever looks at one
+    parcel at a time, so those get re-keyed to ``"owners[0].name.raw_name"`` here.
+
+    Coverage is only as complete as :mod:`adhikar.llm.mapper` actually records
+    today -- currently owner name and total area, not every field (khasra numbers
+    and mutation dates aren't instrumented yet). A field with no entry here is the
+    honest, correct state for a field the mapper doesn't track provenance for; the
+    frontend falls back to a simulated highlight position for those rather than
+    guessing at a bounding box that was never actually measured.
+    """
+    result: dict[str, dict] = {}
+    for path, prov in artifact.provenance.items():
+        match = _PARCEL_PATH_PREFIX.match(path)
+        if match and int(match.group(1)) == index:
+            result[path[match.end() :]] = prov.model_dump(mode="json")
+    return result
+
+
+def _build_parcel_row(
+    document_id: uuid.UUID, artifact: ExtractionArtifact, index: int, *, page_image_urls: list[str]
+) -> ParcelRecord:
     parcel = artifact.parcels[index]
     discrepancy = artifact.discrepancy_for(parcel.parcel_key)
 
@@ -107,11 +185,22 @@ def _build_parcel_row(document_id: uuid.UUID, artifact: ExtractionArtifact, inde
         survey_number=parcel.survey_number,
         total_area_sq_metre=parcel.total_area.sq_metre if parcel.total_area else None,
         record_format=parcel.record_format.value,
+        # No cadastral GeoJSON source is configured in this reference deployment,
+        # so every real upload honestly has no geometry match -- see
+        # ParcelDetail.geometry's docstring. Wiring one means resolving
+        # ADHIKAR_GEOMETRY_SOURCE_PATH to a ParcelGeometry per parcel_key and
+        # passing it as `geometries_by_parcel_key` to `process_document` above.
+        geometry=None,
         mismatch_score=discrepancy.mismatch_score if discrepancy else None,
         confidence_score=discrepancy.confidence_score if discrepancy else None,
         recommended_action=discrepancy.recommended_action.value if discrepancy else None,
         requires_human_review=artifact.requires_human_review,
-        artifact_json=parcel.model_dump(mode="json"),
+        artifact_json={
+            **parcel.model_dump(mode="json"),
+            "provenance": _provenance_for_parcel(artifact, index),
+            "validation_issues": [issue.model_dump(mode="json") for issue in parcel_issues],
+        },
+        page_image_urls=page_image_urls,
         validation_issue_count=len(parcel_issues),
         validation_highest_severity=highest.value if highest else None,
     )

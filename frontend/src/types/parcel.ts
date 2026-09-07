@@ -39,7 +39,12 @@ export interface ParcelSummary {
   village: string | null;
   khata_number: string | null;
   survey_number: string | null;
-  total_area_sq_metre: number | null;
+  /** A `Decimal` on the backend (`Numeric(18,4)`) -- Pydantic serializes that as a
+   * JSON *string* ("8005.0000"), not a number, to avoid float precision loss. The
+   * demo fixtures provide a plain number instead. Always route this through
+   * `formatArea()` (lib/utils.ts), which coerces either shape correctly, rather
+   * than calling `.toFixed()` on it directly. */
+  total_area_sq_metre: number | string | null;
   mismatch_score: number | null;
   confidence_score: number | null;
   recommended_action: RecommendedAction | null;
@@ -60,8 +65,36 @@ export interface ValidationIssue {
   confidence: number;
 }
 
+/** Matches `adhikar.schemas.ocr.BoundingBox` -- normalized [0,1] page coordinates. */
+export interface RealBoundingBox {
+  page_index: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** One `artifact_json.provenance` entry -- real bbox attribution when the OCR
+ * ensemble's line text matched the extracted value confidently enough (see
+ * `adhikar.llm.bbox_attribution`); `bbox: null` is the honest "no confident match
+ * found" state, not a missing feature. */
+export interface RealFieldProvenance {
+  extractor: string;
+  confidence: number;
+  raw_text: string | null;
+  bbox: RealBoundingBox | null;
+  reason?: string | null;
+}
+
 export interface ParcelDetail extends ParcelSummary {
   artifact_json: Record<string, unknown>;
+  /** Matched cadastral polygon as GeoJSON, or `null` when no geometry source is
+   * configured / matched -- the honest default for a real upload today. */
+  geometry: GeoJSON.Geometry | null;
+  /** Server-relative URLs (join with `API_ORIGIN`, not `API_BASE`) of the source
+   * document's rendered pages, in order. Empty for demo-fixture records, which
+   * render the mock synthetic document instead. */
+  page_image_urls: string[];
 }
 
 export interface UploadResponse {
