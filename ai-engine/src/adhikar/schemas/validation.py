@@ -100,6 +100,53 @@ class RuleCode(StrEnum):
     CORRECTION_CHANGED_AREA = "CORRECTION_CHANGED_AREA"
     """A mutation typed as a clerical correction that nonetheless moves area."""
 
+    # -- ownership succession (cross-document; see adhikar.validation.succession) ---------
+    # These are the only rules in the catalogue that judge a *relationship between
+    # documents* rather than one record's internal consistency. Every one of them is
+    # phrased as a statement about evidence, never about entitlement: the engine has
+    # no basis to decide who inherits and deliberately carries no code that says so.
+    SUCCESSION_OWNER_IDENTITY_MISMATCH = "SUCCESSION_OWNER_IDENTITY_MISMATCH"
+    """The death certificate names somebody the previous record did not record as owner."""
+
+    SUCCESSION_NAME_MATCH_APPROXIMATE = "SUCCESSION_NAME_MATCH_APPROXIMATE"
+    """Two documents were linked on a fuzzy name match, not an exact one. Recorded
+    explicitly so a chain that rests on an OCR-tolerant comparison says so."""
+
+    SUCCESSION_EVENT_SEQUENCE_INVALID = "SUCCESSION_EVENT_SEQUENCE_INVALID"
+    """An ownership-changing event is dated before the death it is said to follow."""
+
+    SUCCESSION_RECORD_NOT_UPDATED_AFTER_DEATH = "SUCCESSION_RECORD_NOT_UPDATED_AFTER_DEATH"
+    """A death is recorded but the register still shows the deceased as holder."""
+
+    SUCCESSION_DEATH_RECORD_MISSING = "SUCCESSION_DEATH_RECORD_MISSING"
+    SUCCESSION_MUTATION_MISSING = "SUCCESSION_MUTATION_MISSING"
+
+    SUCCESSION_PARCEL_MISMATCH = "SUCCESSION_PARCEL_MISMATCH"
+    """The before and after records identify different land."""
+
+    SUCCESSION_MUTATION_PREDECESSOR_MISMATCH = "SUCCESSION_MUTATION_PREDECESSOR_MISMATCH"
+    SUCCESSION_MUTATION_PARCEL_MISMATCH = "SUCCESSION_MUTATION_PARCEL_MISMATCH"
+
+    SUCCESSION_SHARE_SUM_INCONSISTENT = "SUCCESSION_SHARE_SUM_INCONSISTENT"
+    SUCCESSION_AREA_MISMATCH = "SUCCESSION_AREA_MISMATCH"
+
+    SUCCESSION_HEIRS_NOT_IDENTIFIED = "SUCCESSION_HEIRS_NOT_IDENTIFIED"
+    """No family member of the deceased is named anywhere in the submitted documents."""
+
+    SUCCESSION_EVIDENCE_MISSING = "SUCCESSION_EVIDENCE_MISSING"
+    """Ownership changed and no submitted document accounts for the change."""
+
+    SUCCESSION_EXCLUSIVE_TRANSFER_UNSUPPORTED = "SUCCESSION_EXCLUSIVE_TRANSFER_UNSUPPORTED"
+    """Several potential heirs are named and the record vests the whole parcel in a
+    subset of them, with nothing on file addressing the allocation. Not an allegation:
+    the finding is that the evidence is silent, and that is what it says."""
+
+    SUCCESSION_UNEXPLAINED_TRANSITION = "SUCCESSION_UNEXPLAINED_TRANSITION"
+    """Consecutive records show different holders with no event between them."""
+
+    SUCCESSION_DOCUMENTS_CONTRADICT = "SUCCESSION_DOCUMENTS_CONTRADICT"
+    SUCCESSION_DOCUMENT_UNREADABLE = "SUCCESSION_DOCUMENT_UNREADABLE"
+
     # -- encumbrance -----------------------------------------------------------------------
     ENCUMBRANCE_ACTIVE = "ENCUMBRANCE_ACTIVE"
     """Informational by default: a live charge exists. Consequential for buyers."""
@@ -150,6 +197,16 @@ class RuleTolerance(BaseModel):
     min_confidence: float | None = None
     z_score_threshold: float | None = None
     max_age_days: int | None = None
+
+    risk_points: float | None = Field(default=None, ge=0.0, le=100.0)
+    """Weight this rule carries in the succession risk score (0-100).
+
+    Only the succession rules read it. It lives in the policy rather than in code
+    for the same reason the area tolerances do: how heavily an unexplained transfer
+    should rank against a parcel mismatch is a departmental judgement, and a score
+    nobody can re-weight without a code change is a score nobody can calibrate.
+    """
+
     note: str = ""
 
 
@@ -188,6 +245,7 @@ class ValidationPolicy(BaseModel):
             ),
             z_score_threshold=configured.z_score_threshold,
             max_age_days=configured.max_age_days,
+            risk_points=configured.risk_points,
             note=configured.note,
         )
 

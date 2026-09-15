@@ -15,15 +15,32 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.base import Base
+from .enums import Priority, ReviewStatus
 
-_JSONB_OR_JSON = JSONB().with_variant(JSON(), "sqlite")
+_JSONB_OR_JSON = JSONB(none_as_null=True).with_variant(JSON(none_as_null=True), "sqlite")
 """JSONB on Postgres, plain JSON on SQLite -- the one column-type difference this
-schema still needs between the two backends every other column already tolerates."""
+schema still needs between the two backends every other column already tolerates.
+
+``none_as_null=True`` is load-bearing, not tidiness: by default SQLAlchemy stores a
+Python ``None`` in a JSON column as the JSON value ``null``, which is *not* SQL NULL.
+Every ``geometry IS NOT NULL`` filter -- the one the map view and the GeoJSON export
+are built on -- would then match every row, including the parcels that have no
+matched cadastral polygon at all."""
 
 
 class Document(Base):
@@ -108,6 +125,39 @@ class ParcelRecord(Base):
     validation_issue_count: Mapped[int] = mapped_column(default=0)
     validation_highest_severity: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
 
+    # -- Adjudication workflow ---------------------------------------------------
+    # The pipeline's `recommended_action` above is what the *machine* thinks should
+    # happen; everything in this block is what a *human* has actually done about it.
+    # Keeping the two separate is what makes "the model said auto-approve and the
+    # Tehsildar disagreed" a queryable fact rather than a lost one.
+
+    review_status: Mapped[str] = mapped_column(
+        String(16), default=ReviewStatus.PENDING.value, index=True
+    )
+    priority: Mapped[str] = mapped_column(String(16), default=Priority.NORMAL.value, index=True)
+    priority_score: Mapped[float] = mapped_column(default=0.0, index=True)
+    """The continuous 0-100 triage score `priority` is banded from -- kept alongside
+    the band so the queue can sort strictly within a band without a tie-break scan."""
+
+    assigned_to: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    """Username of the officer who has claimed this record, or NULL for unclaimed."""
+
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sla_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    """When this record breaches its priority band's service level. Stored rather
+    than computed on read so "overdue" is a plain indexed comparison in SQL instead
+    of a per-row calculation the database cannot filter on."""
+
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    decision_note: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+
+    correction_count: Mapped[int] = mapped_column(Integer, default=0)
+    """How many fields a human has had to fix on this record. The single most useful
+    number for measuring whether the extraction model is actually improving."""
+
+    has_human_corrections: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -115,7 +165,15 @@ class ParcelRecord(Base):
 
     document: Mapped[Document] = relationship(back_populates="parcels")
     review_events: Mapped[list[ReviewEvent]] = relationship(
-        back_populates="parcel", cascade="all, delete-orphan"
+        back_populates="parcel", cascade="all, delete-orphan", order_by="ReviewEvent.created_at"
+    )
+
+    # The queue view's hot path: "unclaimed work in my district, worst first".
+    # A composite index because filtering on status then ordering by score is one
+    # operation to the planner, and the single-column indexes above cannot serve it.
+    __table_args__ = (
+        Index("ix_parcels_queue", "review_status", "district", "priority_score"),
+        Index("ix_parcels_jurisdiction", "state", "district", "village"),
     )
 
 
@@ -132,13 +190,22 @@ class ReviewEvent(Base):
     parcel_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("parcels.id", ondelete="CASCADE"), index=True)
 
     field_path: Mapped[str] = mapped_column(String(512))
-    """JSON path into the artifact, matching FieldProvenance keys."""
+    """JSON path into the artifact, matching FieldProvenance keys. For events that
+    are not about a single field (a status change, an assignment) this is ``"$"`` --
+    the whole record -- rather than NULL, so every row answers "what did this touch?"
+    with the same kind of value."""
 
     previous_value: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
     new_value: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
-    action: Mapped[str] = mapped_column(String(32))  # "accepted" | "corrected" | "flagged"
-    reviewer: Mapped[str] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(32), index=True)  # see models.enums.ReviewAction
+    reviewer: Mapped[str] = mapped_column(String(255), index=True)
+    reviewer_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    """The role the reviewer held *at the time of the action*. Denormalized on
+    purpose: an audit trail that re-reads the user's current role would silently
+    rewrite history the moment somebody is promoted."""
+
     note: Mapped[str | None] = mapped_column(String(2048), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     parcel: Mapped[ParcelRecord] = relationship(back_populates="review_events")

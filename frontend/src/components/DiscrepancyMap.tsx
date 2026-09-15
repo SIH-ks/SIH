@@ -103,13 +103,13 @@ export function DiscrepancyMap({ geometry, mismatchScore, parcelKey, neighbourGe
   }, [geometry, mismatchScore]);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-card">
-      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+    <div className="overflow-hidden rounded-xl border border-line bg-surface-card shadow-card">
+      <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
-          <Crosshair className="h-4 w-4 text-navy-700" />
-          <span className="text-sm font-semibold text-slate-700">Geospatial Cross-Reference</span>
+          <Crosshair className="h-4 w-4 text-ink-muted" aria-hidden />
+          <span className="text-sm font-semibold text-ink-primary">Geospatial cross-reference</span>
         </div>
-        <span className="font-mono text-[11px] text-slate-400">Parcel {parcelKey}</span>
+        <span className="font-mono text-[11px] text-ink-muted">{parcelKey}</span>
       </div>
 
       {/* The map canvas itself stays dark regardless of the surrounding page theme
@@ -117,7 +117,7 @@ export function DiscrepancyMap({ geometry, mismatchScore, parcelKey, neighbourGe
           (Mapbox/Google dark map styles embedded in light admin panels), and the
           mismatch-colored glow reads better against it than against a light tile set. */}
       <div className="relative">
-        <div ref={containerRef} className="h-[360px] w-full" />
+        <div ref={containerRef} className="h-[300px] w-full" />
 
         <div className="pointer-events-none absolute bottom-2 left-2 flex flex-col gap-0.5 rounded bg-black/60 px-2 py-1 font-mono text-[10px] text-emerald-300 backdrop-blur-sm">
           <span>LAT {coords ? coords.lat.toFixed(5) : "—"}</span>
@@ -127,19 +127,19 @@ export function DiscrepancyMap({ geometry, mismatchScore, parcelKey, neighbourGe
 
         {!geometry && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/50">
-            <span className="rounded-full bg-amber-400/90 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-amber-950">
-              No cadastral geometry matched
+            <span className="max-w-[80%] rounded-lg bg-surface-card px-3 py-2 text-center text-xs font-semibold text-ink-primary shadow-pop">
+              No cadastral polygon matched to this parcel — the mismatch score is undetermined, not zero.
             </span>
           </div>
         )}
       </div>
 
-      <div className="flex items-center gap-4 border-t border-slate-200 bg-slate-50 px-4 py-2.5 text-xs text-slate-500">
+      <div className="flex flex-wrap items-center gap-4 border-t border-line bg-surface-sunken px-4 py-2.5 text-xs text-ink-secondary">
         {(
           [
-            ["#10b981", "Within tolerance"],
-            ["#f59e0b", "Minor / material"],
-            ["#ef4444", "Severe"],
+            ["var(--status-good)", "Within tolerance"],
+            ["var(--status-warning)", "Minor / material"],
+            ["var(--status-critical)", "Severe"],
           ] as const
         ).map(([color, label]) => (
           <span key={label} className="flex items-center gap-1.5">
@@ -153,10 +153,16 @@ export function DiscrepancyMap({ geometry, mismatchScore, parcelKey, neighbourGe
 }
 
 function mismatchColor(score: number | null): string {
-  if (score === null) return "#576269";
-  if (score <= 5) return "#3ecf8e";
-  if (score <= 50) return "#f5a623";
-  return "#ff4d5e";
+  // Read from the live tokens so the polygon matches the legend beneath it in
+  // both themes. MapLibre paints into a canvas Tailwind cannot reach, so this is
+  // the only way the map stays inside the design system's palette.
+  if (typeof window === "undefined") return "#7c8798";
+  const read = (name: string, fallback: string) =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+  if (score === null) return read("--ink-muted", "#7c8798");
+  if (score <= 5) return read("--status-good", "#0ca30c");
+  if (score <= 50) return read("--status-warning", "#fab219");
+  return read("--status-critical", "#d03b3b");
 }
 
 function addParcelLayer(map: MapLibreMap, id: string, geometry: GeoJSON.Geometry, color: string, glow: boolean) {

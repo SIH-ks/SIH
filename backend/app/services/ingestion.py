@@ -7,6 +7,7 @@ engine's API can change without touching the request-handling layer.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import tempfile
 import uuid
@@ -17,10 +18,12 @@ from adhikar.pipeline import process_document
 from adhikar.preprocessing.loader import load_document
 from adhikar.schemas.artifact import ExtractionArtifact
 from adhikar.schemas.enums import RecordFormat
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
 from ..models.record import Document, ParcelRecord
+from .triage import assess_priority, sla_due_at
 
 
 class IngestionError(Exception):
@@ -32,6 +35,20 @@ class IngestionError(Exception):
 
 
 _PARCEL_PATH_PREFIX = re.compile(r"^\$\.parcels\[(\d+)\]\.")
+
+
+def find_duplicate(db: Session, file_bytes: bytes) -> Document | None:
+    """Return the already-ingested document with these exact bytes, if any.
+
+    Bulk scanning workflows re-submit the same file constantly -- a re-run of a
+    folder sync, an operator retrying after a timeout, the same register scanned
+    twice by two clerks. Re-processing a byte-identical scan costs a full OCR + LLM
+    pass and produces a second set of parcel rows that somebody then has to reconcile
+    against the first. Detecting it by content hash (which the pipeline computes
+    anyway) is cheap and exact; detecting it by filename would be neither.
+    """
+    digest = hashlib.sha256(file_bytes).hexdigest()
+    return db.scalar(select(Document).where(Document.sha256 == digest))
 
 
 def ingest_upload(
@@ -174,6 +191,16 @@ def _build_parcel_row(
     ]
     highest = max((i.severity for i in parcel_issues), key=lambda s: s.rank, default=None)
 
+    # Triage at ingestion rather than on read: the queue orders by this score in SQL,
+    # and a score computed per-request could not be an ORDER BY.
+    assessment = assess_priority(
+        mismatch_score=discrepancy.mismatch_score if discrepancy else None,
+        confidence_score=discrepancy.confidence_score if discrepancy else None,
+        validation_highest_severity=highest.value if highest else None,
+        validation_issue_count=len(parcel_issues),
+        recommended_action=discrepancy.recommended_action.value if discrepancy else None,
+    )
+
     return ParcelRecord(
         id=uuid.uuid4(),
         document_id=document_id,
@@ -203,4 +230,7 @@ def _build_parcel_row(
         page_image_urls=page_image_urls,
         validation_issue_count=len(parcel_issues),
         validation_highest_severity=highest.value if highest else None,
+        priority=assessment.priority.value,
+        priority_score=assessment.score,
+        sla_due_at=sla_due_at(assessment.priority),
     )

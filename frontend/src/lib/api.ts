@@ -1,130 +1,249 @@
 /**
- * Thin fetch wrapper over the FastAPI backend. No client library dependency --
- * the surface is small enough that a generated client would be more ceremony than
- * value at this stage of the project.
+ * Server-side data access for React Server Components.
  *
- * **Demo fallback.** When the backend is unreachable and `NEXT_PUBLIC_ALLOW_DEMO_DATA`
- * is not explicitly "false", read paths fall back to bundled fixtures so the console
- * is demoable without the full Postgres/PostGIS stack. `usingDemoData()` reports when
- * that happened, and the UI surfaces it — fixtures are never silently presented as
- * real extraction output. Write paths never fall back; a correction that could not be
- * persisted must fail loudly.
+ * Reads the session cookie directly (`next/headers`) and calls the FastAPI
+ * backend, so a page renders with its data already in the HTML — no loading
+ * spinner, no client-side waterfall, and the token never crosses into the
+ * browser bundle. Client components use `lib/client-api.ts` instead, which goes
+ * through the same-origin proxy.
+ *
+ * **Failures are values, not exceptions.** Every reader returns a
+ * `Result<T>` — `{ data }` or `{ error }` — rather than throwing. A dashboard
+ * assembled from six independent panels should degrade one panel when one query
+ * fails, not blank the page; making that the default shape is what stops each
+ * call site from having to remember a try/catch.
  */
 
-import { demoDetail, demoSummaries } from "@/lib/demoData";
-import type { ParcelDetail, ParcelListFilters, ParcelSummary, UploadResponse } from "@/types/parcel";
+import "server-only";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
-const DEMO_ALLOWED = process.env.NEXT_PUBLIC_ALLOW_DEMO_DATA !== "false";
+import { cookies } from "next/headers";
 
-/** The backend's origin with no path -- `page_image_urls` come back as
- * server-relative paths (`/static/uploads/...`), so building an `<img src>` needs
- * this, not `API_BASE` (which carries the `/api/v1` prefix). Derived from
- * `API_BASE` rather than a second env var so the two can never point at different
- * hosts by accident. */
-export const API_ORIGIN = API_BASE.replace(/\/api\/v\d+\/?$/, "");
+import { API_BASE } from "@/lib/api-config";
+import { SESSION_COOKIE, type SessionProfile } from "@/lib/session";
+import type {
+  AnalyticsSummary,
+  AuditEntry,
+  DistrictRow,
+  DocumentSummary,
+  Facets,
+  Page,
+  ParcelDetail,
+  ParcelGeoJson,
+  ParcelListFilters,
+  ParcelSummary,
+  QueueHealth,
+  ReviewEvent,
+  RuleCatalogueEntry,
+  RuleFrequency,
+  SystemStatus,
+  ThroughputRow,
+  TimeseriesPoint,
+} from "@/types/parcel";
+import type {
+  OwnershipEvent,
+  SuccessionCaseDetail,
+  SuccessionCaseFilters,
+  SuccessionCaseSummary,
+  SuccessionSummary,
+} from "@/types/succession";
 
-class ApiError extends Error {
-  constructor(
-    message: string,
-    public status: number,
-    public body: unknown,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
+export type ApiFailure = {
+  status: number;
+  message: string;
+  /** True when the backend could not be reached at all, as opposed to answering
+   * with an error. The console words these very differently: one is "start the
+   * server", the other is "this request was refused". */
+  unreachable: boolean;
+};
 
-/** True when the last read served fixtures because the backend was unreachable. */
-let servedDemoData = false;
-export function usingDemoData(): boolean {
-  return servedDemoData;
-}
+export type Result<T> = { data: T; error?: undefined } | { data?: undefined; error: ApiFailure };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: { ...(init?.headers ?? {}) },
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw new ApiError(`Request to ${path} failed with ${response.status}`, response.status, body);
-  }
-  return (await response.json()) as T;
-}
+export const NOT_FOUND = 404;
 
-/**
- * Whether a failure means "the Adhikar API isn't there" (fixtures are appropriate)
- * rather than "the API answered and said no" (it isn't).
- *
- * Connection refusal is the obvious case. A 404 counts too: our `/parcels` route
- * always answers 200 with a list when the backend is up, so a 404 means something
- * other than this API is answering on that port -- which is exactly what happens
- * when another service already occupies :8000. 5xx likewise means the backend is
- * present but not serving. Everything else (401, 422, ...) is a real answer and is
- * allowed to surface.
- */
-function backendUnavailable(err: unknown): boolean {
-  if (!(err instanceof ApiError)) return true;
-  return err.status === 404 || err.status >= 500;
-}
-
-export async function listParcels(filters: ParcelListFilters = {}): Promise<ParcelSummary[]> {
+function query(filters: Record<string, unknown> = {}): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
-    if (value !== undefined && value !== null) params.set(key, String(value));
+    if (value === undefined || value === null || value === "") continue;
+    if (typeof value === "boolean" && !value) continue; // omit false flags entirely
+    params.set(key, String(value));
   }
-  const query = params.toString();
-  try {
-    const result = await request<ParcelSummary[]>(`/parcels${query ? `?${query}` : ""}`);
-    servedDemoData = false;
-    return result;
-  } catch (err) {
-    if (DEMO_ALLOWED && backendUnavailable(err)) {
-      servedDemoData = true;
-      return demoSummaries();
-    }
-    throw err;
-  }
+  const encoded = params.toString();
+  return encoded ? `?${encoded}` : "";
 }
 
-export async function getParcel(id: string): Promise<ParcelDetail> {
+async function get<T>(path: string): Promise<Result<T>> {
+  let token: string | undefined;
   try {
-    const result = await request<ParcelDetail>(`/parcels/${id}`);
-    servedDemoData = false;
-    return result;
-  } catch (err) {
-    if (DEMO_ALLOWED && backendUnavailable(err)) {
-      const fixture = demoDetail(id);
-      if (fixture) {
-        servedDemoData = true;
-        return fixture;
-      }
-      throw new ApiError(`Parcel ${id} not found in demo data`, 404, null);
-    }
-    throw err;
+    token = (await cookies()).get(SESSION_COOKIE)?.value;
+  } catch {
+    token = undefined;
   }
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: "no-store",
+    });
+  } catch {
+    return {
+      error: {
+        status: 0,
+        unreachable: true,
+        message: "Could not reach the Adhikar API. Is the backend running on :8000?",
+      },
+    };
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    const detail = body?.detail;
+    return {
+      error: {
+        status: response.status,
+        unreachable: false,
+        message:
+          typeof detail === "string"
+            ? detail
+            : typeof detail?.message === "string"
+              ? detail.message
+              : `Request to ${path} failed (${response.status}).`,
+      },
+    };
+  }
+
+  return { data: (await response.json()) as T };
 }
 
-export function submitCorrection(
+// -- identity ----------------------------------------------------------------
+
+export async function getSessionProfile(): Promise<SessionProfile | null> {
+  const result = await get<SessionProfile>("/auth/me");
+  return result.data ?? null;
+}
+
+// -- parcels -----------------------------------------------------------------
+
+export function listParcels(filters: ParcelListFilters = {}): Promise<Result<Page<ParcelSummary>>> {
+  return get<Page<ParcelSummary>>(`/parcels${query(filters as Record<string, unknown>)}`);
+}
+
+export function getReviewQueue(
+  scope: "mine" | "unassigned" | "district" | "all" = "all",
+  options: { limit?: number; offset?: number } = {},
+): Promise<Result<Page<ParcelSummary>>> {
+  return get<Page<ParcelSummary>>(`/parcels/queue${query({ scope, ...options })}`);
+}
+
+export function getParcel(id: string): Promise<Result<ParcelDetail>> {
+  return get<ParcelDetail>(`/parcels/${id}`);
+}
+
+export function getParcelEvents(id: string): Promise<Result<ReviewEvent[]>> {
+  return get<ReviewEvent[]>(`/parcels/${id}/events`);
+}
+
+export function getFacets(): Promise<Result<Facets>> {
+  return get<Facets>("/parcels/facets");
+}
+
+export function getParcelGeoJson(
+  filters: { state?: string; district?: string; review_status?: string; limit?: number } = {},
+): Promise<Result<ParcelGeoJson>> {
+  return get<ParcelGeoJson>(`/parcels/geojson${query(filters)}`);
+}
+
+// -- documents ---------------------------------------------------------------
+
+export function listDocuments(
+  options: { limit?: number; offset?: number } = {},
+): Promise<Result<Page<DocumentSummary>>> {
+  return get<Page<DocumentSummary>>(`/documents${query(options)}`);
+}
+
+// -- audit -------------------------------------------------------------------
+
+export function listAuditEvents(
+  filters: { reviewer?: string; action?: string; district?: string; limit?: number; offset?: number } = {},
+): Promise<Result<Page<AuditEntry>>> {
+  return get<Page<AuditEntry>>(`/audit/events${query(filters)}`);
+}
+
+// -- analytics ---------------------------------------------------------------
+
+export function getSummary(
+  scope: { district?: string; state?: string } = {},
+): Promise<Result<AnalyticsSummary>> {
+  return get<AnalyticsSummary>(`/analytics/summary${query(scope)}`);
+}
+
+export function getDistrictBreakdown(state?: string): Promise<Result<DistrictRow[]>> {
+  return get<DistrictRow[]>(`/analytics/districts${query({ state })}`);
+}
+
+export function getTimeseries(days = 30, district?: string): Promise<Result<TimeseriesPoint[]>> {
+  return get<TimeseriesPoint[]>(`/analytics/timeseries${query({ days, district })}`);
+}
+
+export function getRuleFrequency(limit = 12): Promise<Result<RuleFrequency[]>> {
+  return get<RuleFrequency[]>(`/analytics/rules${query({ limit })}`);
+}
+
+export function getThroughput(days = 30): Promise<Result<ThroughputRow[]>> {
+  return get<ThroughputRow[]>(`/analytics/throughput${query({ days })}`);
+}
+
+export function getQueueHealth(district?: string): Promise<Result<QueueHealth>> {
+  return get<QueueHealth>(`/analytics/queue-health${query({ district })}`);
+}
+
+// -- system ------------------------------------------------------------------
+
+export function getRuleCatalogue(): Promise<Result<RuleCatalogueEntry[]>> {
+  return get<RuleCatalogueEntry[]>("/system/rules");
+}
+
+export function getSystemStatus(): Promise<Result<SystemStatus>> {
+  return get<SystemStatus>("/system/status");
+}
+
+export function getActivePolicy(): Promise<Result<{ name: string; policy: Record<string, unknown> }>> {
+  return get<{ name: string; policy: Record<string, unknown> }>("/system/policy");
+}
+
+export function listUsers(): Promise<Result<SessionProfile[]>> {
+  return get<SessionProfile[]>("/auth/users");
+}
+
+// -- ownership succession ----------------------------------------------------
+
+export function listSuccessionCases(
+  filters: SuccessionCaseFilters = {},
+): Promise<Result<Page<SuccessionCaseSummary>>> {
+  return get<Page<SuccessionCaseSummary>>(
+    `/succession/cases${query(filters as Record<string, unknown>)}`,
+  );
+}
+
+export function getSuccessionCase(id: string): Promise<Result<SuccessionCaseDetail>> {
+  return get<SuccessionCaseDetail>(`/succession/cases/${id}`);
+}
+
+/** Succession cases raised against one parcel. Drives the panel on the parcel
+ * detail page, which is absent — not empty — when a record has no case. */
+export function getParcelSuccessionCases(
   parcelId: string,
-  reviewer: string,
-  body: { field_path: string; new_value: unknown; note?: string },
-) {
-  // No demo fallback: a correction that cannot be persisted must fail visibly.
-  return request(`/parcels/${parcelId}/review?reviewer=${encodeURIComponent(reviewer)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+): Promise<Result<SuccessionCaseSummary[]>> {
+  return get<SuccessionCaseSummary[]>(`/succession/parcels/${parcelId}/cases`);
 }
 
-export function uploadDocument(file: File, declaredFormat: string): Promise<UploadResponse> {
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("declared_format", declaredFormat);
-  return request<UploadResponse>("/documents/upload", { method: "POST", body: formData });
+/** Every ownership event recorded against one parcel, across every case — the
+ * question a revenue office actually asks, which a per-case timeline cannot
+ * answer. */
+export function getOwnershipHistory(parcelKey: string): Promise<Result<OwnershipEvent[]>> {
+  return get<OwnershipEvent[]>(`/succession/history${query({ parcel_key: parcelKey })}`);
 }
 
-export { ApiError };
+export function getSuccessionSummary(district?: string): Promise<Result<SuccessionSummary>> {
+  return get<SuccessionSummary>(`/succession/summary${query({ district })}`);
+}

@@ -26,3 +26,11 @@ output/
 
 # EasyOCR model cache (large; regenerated on first run)
 .EasyOCR/
+
+# Generated at runtime, not source. `backend/scripts/seed_demo_data.py --reset`
+# rebuilds both from scratch, so a checkout never needs them committed.
+backend/data/*.db
+backend/data/uploads/
+
+# TypeScript incremental build cache
+*.tsbuildinfo

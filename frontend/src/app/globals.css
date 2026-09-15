@@ -1,15 +1,199 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-html {
+/* ==========================================================================
+   Design tokens
+   --------------------------------------------------------------------------
+   Two separate systems, kept separate on purpose:
+
+   1. CHROME (--surface-*, --ink-*, --line-*, --brand-*) dresses the application
+      itself. It is institutional: a deep navy command bar over a near-white
+      workspace, with the tricolour saffron and green used only as accents.
+
+   2. DATA (--series-*, --status-*, --grid, --axis) is the validated
+      visualization palette. Its hues are NOT free to change for aesthetic
+      reasons: the slot ordering is what keeps adjacent series distinguishable
+      under colour-vision deficiency, and it was checked with a validator rather
+      than by eye. Chrome colours never encode data, and series colours never
+      appear as chrome -- a blue that means "a series" one moment and "a button"
+      the next teaches the reader nothing.
+
+   Dark values are declared under BOTH `@media (prefers-color-scheme: dark)`
+   (guarded so an explicit light stamp beats OS dark) and `[data-theme="dark"]`
+   (so the in-app toggle wins in both directions). The dark series steps are
+   selected for the dark surface, not an automatic inversion of the light ones.
+   ========================================================================== */
+
+:root {
   color-scheme: light;
+
+  /* -- chrome ------------------------------------------------------------ */
+  --surface-page: #f6f7f9;
+  --surface-card: #ffffff;
+  --surface-sunken: #f1f3f6;
+  --surface-raised: #ffffff;
+  --surface-inverse: #0a1530;
+
+  --ink-primary: #0f172a;
+  --ink-secondary: #475569;
+  --ink-muted: #7c8798;
+  --ink-inverse: #f8fafc;
+
+  --line-hairline: #e4e8ee;
+  --line-strong: #cbd3de;
+
+  --brand-navy: #0f2557;
+  --brand-navy-deep: #0a1530;
+  --brand-saffron: #d97706;
+  --brand-green: #0f7b3d;
+
+  --focus-ring: #2a78d6;
+
+  /* -- data: categorical (validated slot order, never cycled) ------------ */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+
+  /* -- data: status (fixed, never themed; always shipped with icon+label) */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+
+  /* Readable text/border partners for the status fills above. The fills are
+     tuned for marks on a surface, not for 4.5:1 body text, so a status *word*
+     uses these instead of the fill colour. */
+  --status-good-ink: #046a04;
+  --status-warning-ink: #92610a;
+  --status-serious-ink: #a2472a;
+  --status-critical-ink: #a41f1f;
+
+  --status-good-wash: #ecfdf3;
+  --status-warning-wash: #fffaeb;
+  --status-serious-wash: #fff4ed;
+  --status-critical-wash: #fef2f2;
+
+  /* -- data: chart chrome ------------------------------------------------ */
+  --grid: #e8ebf0;
+  --axis: #cbd3de;
+  --chart-surface: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --surface-page: #080d18;
+    --surface-card: #0f1729;
+    --surface-sunken: #0b1220;
+    --surface-raised: #16203a;
+    --surface-inverse: #f8fafc;
+
+    --ink-primary: #eef2f8;
+    --ink-secondary: #a5b3c9;
+    --ink-muted: #7787a0;
+    --ink-inverse: #0a1530;
+
+    --line-hairline: #1e2b47;
+    --line-strong: #2c3d61;
+
+    --brand-navy: #16203a;
+    --brand-navy-deep: #0b1220;
+    --brand-saffron: #f0a03c;
+    --brand-green: #34c46e;
+
+    --focus-ring: #3987e5;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+
+    --status-good-ink: #4ade80;
+    --status-warning-ink: #fbbf24;
+    --status-serious-ink: #fb923c;
+    --status-critical-ink: #f87171;
+
+    --status-good-wash: rgba(12, 163, 12, 0.14);
+    --status-warning-wash: rgba(250, 178, 25, 0.14);
+    --status-serious-wash: rgba(236, 131, 90, 0.14);
+    --status-critical-wash: rgba(208, 59, 59, 0.16);
+
+    --grid: #1a2540;
+    --axis: #2c3d61;
+    --chart-surface: #0f1729;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-page: #080d18;
+  --surface-card: #0f1729;
+  --surface-sunken: #0b1220;
+  --surface-raised: #16203a;
+  --surface-inverse: #f8fafc;
+
+  --ink-primary: #eef2f8;
+  --ink-secondary: #a5b3c9;
+  --ink-muted: #7787a0;
+  --ink-inverse: #0a1530;
+
+  --line-hairline: #1e2b47;
+  --line-strong: #2c3d61;
+
+  --brand-navy: #16203a;
+  --brand-navy-deep: #0b1220;
+  --brand-saffron: #f0a03c;
+  --brand-green: #34c46e;
+
+  --focus-ring: #3987e5;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --status-good-ink: #4ade80;
+  --status-warning-ink: #fbbf24;
+  --status-serious-ink: #fb923c;
+  --status-critical-ink: #f87171;
+
+  --status-good-wash: rgba(12, 163, 12, 0.14);
+  --status-warning-wash: rgba(250, 178, 25, 0.14);
+  --status-serious-wash: rgba(236, 131, 90, 0.14);
+  --status-critical-wash: rgba(208, 59, 59, 0.16);
+
+  --grid: #1a2540;
+  --axis: #2c3d61;
+  --chart-surface: #0f1729;
+}
+
+/* ========================================================================== */
+
+html {
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background-color: #f8fafc; /* slate-50 */
+  background-color: var(--surface-page);
+  color: var(--ink-primary);
 }
 
 ::selection {
@@ -17,18 +201,72 @@ body {
   color: #0f2557;
 }
 
+:root[data-theme="dark"] ::selection {
+  background: #1e3a8a;
+  color: #eff6ff;
+}
+
+/* A single visible focus treatment everywhere, so keyboard navigation through a
+   dense reviewer console is never guesswork. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border: 2px solid #f8fafc;
+  background: var(--line-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
   border-radius: 8px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--ink-muted);
+  background-clip: content-box;
+}
+
+/* MapLibre's stylesheet is imported by the map component; these overrides keep
+   its controls and popups inside our token system instead of its own defaults. */
+.maplibregl-popup-content {
+  background: var(--surface-card) !important;
+  color: var(--ink-primary) !important;
+  border-radius: 10px !important;
+  padding: 0 !important;
+  box-shadow: 0 8px 24px rgba(15, 37, 87, 0.18) !important;
+  border: 1px solid var(--line-hairline);
+}
+.maplibregl-popup-tip {
+  border-top-color: var(--surface-card) !important;
+  border-bottom-color: var(--surface-card) !important;
+}
+.maplibregl-ctrl-group {
+  background: var(--surface-card) !important;
+  border: 1px solid var(--line-hairline) !important;
+}
+.maplibregl-ctrl-group button + button {
+  border-top-color: var(--line-hairline) !important;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+}
+
+@layer utilities {
+  /* Long jurisdiction names and rule codes need to wrap somewhere sensible in a
+     dense table without a hard `break-all` chopping mid-word. */
+  .break-anywhere {
+    overflow-wrap: anywhere;
+  }
 }

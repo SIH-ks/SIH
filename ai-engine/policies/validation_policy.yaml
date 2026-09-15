@@ -59,6 +59,77 @@ rules:
       Name matching across scripts and spelling variants is approximate; keep
       this informational rather than a hard error.
 
+  # -- Ownership succession ------------------------------------------------------------------
+  # `risk_points` is the weight each finding carries in the succession risk score,
+  # before the status multiplier (fail 1.0, review_required 0.85, warning 0.45).
+  # The score is the plain sum of what fires, capped at 100, and every point is
+  # itemised on the report — so re-weighting here is the supported way to change how
+  # a district ranks these cases, and the arithmetic stays checkable afterwards.
+  #
+  # Nothing in this section can be tuned into an accusation. The engine has no rule
+  # that concludes a transfer was improper, and no amount of weight turns
+  # "the evidence is silent" into "the transfer was wrong".
+
+  SUCCESSION_EXCLUSIVE_TRANSFER_UNSUPPORTED:
+    risk_points: 55
+    note: >
+      Several potential heirs are named and the record vests the parcel in a subset
+      of them, with nothing on file addressing the allocation. Weighted at the top
+      of the range because it is the case this feature exists to surface — but it
+      is a statement about missing evidence, not about anybody's conduct.
+
+  SUCCESSION_DOCUMENTS_CONTRADICT:
+    risk_points: 55
+    note: Two submitted documents disagree on a matter of fact. Resolving that is an adjudication.
+
+  SUCCESSION_PARCEL_MISMATCH:
+    risk_points: 50
+  SUCCESSION_UNEXPLAINED_TRANSITION:
+    risk_points: 50
+  SUCCESSION_EVENT_SEQUENCE_INVALID:
+    risk_points: 45
+  SUCCESSION_EVIDENCE_MISSING:
+    risk_points: 45
+  SUCCESSION_OWNER_IDENTITY_MISMATCH:
+    risk_points: 40
+  SUCCESSION_MUTATION_PREDECESSOR_MISMATCH:
+    risk_points: 35
+  SUCCESSION_MUTATION_PARCEL_MISMATCH:
+    risk_points: 35
+
+  SUCCESSION_AREA_MISMATCH:
+    risk_points: 30
+    absolute_sq_metre: 2.0
+    relative: 0.005
+    note: >
+      Same band as AREA_SUM_MISMATCH. The two figures are usually transcribed from
+      the same survey, so agreement should be tight; a wider tolerance here would
+      absorb the digit slips this check exists to catch.
+
+  SUCCESSION_SHARE_SUM_INCONSISTENT:
+    risk_points: 25
+  SUCCESSION_MUTATION_MISSING:
+    risk_points: 20
+  SUCCESSION_DEATH_RECORD_MISSING:
+    risk_points: 18
+
+  SUCCESSION_RECORD_NOT_UPDATED_AFTER_DEATH:
+    risk_points: 15
+    note: >
+      A holding still recorded against a deceased owner is a backlog item, not a
+      suspicious one, and is weighted well below the evidence findings.
+
+  SUCCESSION_HEIRS_NOT_IDENTIFIED:
+    risk_points: 15
+  SUCCESSION_DOCUMENT_UNREADABLE:
+    risk_points: 12
+
+  SUCCESSION_NAME_MATCH_APPROXIMATE:
+    risk_points: 6
+    note: >
+      A chain linked on a fuzzy name match rather than an exact one. Low weight, but
+      never zero: a reviewer should know which conclusions rest on an approximation.
+
   # -- Encumbrance -----------------------------------------------------------------------
   ENCUMBRANCE_ACTIVE:
     severity: info

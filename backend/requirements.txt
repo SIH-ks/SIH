@@ -22,7 +22,7 @@ geojson-pydantic==1.2.0       # RFC 7946 models that round-trip through PostGIS
 
 # --- Async job queue ---------------------------------------------------------------
 celery[redis]==5.5.3
-redis==6.2.0
+redis==5.2.1
 
 # --- Object storage (scanned records) -----------------------------------------------
 boto3==1.39.3                 # S3 / MinIO compatible
